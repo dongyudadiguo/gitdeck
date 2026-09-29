@@ -470,6 +470,414 @@ $('#search').addEventListener('input',(e)=>{clearTimeout(searchTimer);const v=e.
 document.addEventListener('keydown',(e)=>{if(e.target.tagName==='INPUT'){if(e.key==='Escape'){if($('#cloneModal').classList.contains('show')){closeCloneModal();return;}e.target.value='';state.query='';e.target.blur();render();}return;}if($('#cloneModal').classList.contains('show'))return;if(['ArrowDown','ArrowUp','j','k'].includes(e.key)){const list=state.filtered;if(!list.length)return;e.preventDefault();const dir=(e.key==='ArrowDown'||e.key==='j')?1:-1;let idx=list.findIndex((c)=>c.sha===state.selected);if(idx===-1)idx=0;const next=Math.min(Math.max(idx+dir,0),list.length-1);if(list[next]){state.selected=list[next].sha;renderRows(list);renderDetail();const el=document.querySelector('.row.selected');if(el)el.scrollIntoView({block:'nearest'});}}if(e.key==='/'){e.preventDefault();$('#search').focus();}if((e.ctrlKey||e.metaKey)&&e.key==='o'){e.preventDefault();openRepository();}});
 renderSidebar();
 render();
+
+
+// ============================ 提交功能 ============================
+(async function initCommitFeature() {
+  if (document.readyState === 'loading') {
+    await new Promise(r => document.addEventListener('DOMContentLoaded', r, {once:true}));
+  }
+  await new Promise(r => setTimeout(r, 150));
+
+  const tbRight = document.querySelector('.tb-right');
+  if (!tbRight) { console.warn('[GitDeck-commit] .tb-right 未找到'); return; }
+
+  // ---- 顶栏按钮 ----
+  const commitBtn = document.createElement('button');
+  commitBtn.className = 'btn';
+  commitBtn.id = 'commitBtn';
+  commitBtn.textContent = '提交更改';
+  commitBtn.style.display = 'none';
+  tbRight.insertBefore(commitBtn, tbRight.firstChild);
+
+  // 每 500ms 检查一次状态，决定按钮是否显示
+  setInterval(() => {
+    const canCommit = state.repo && state.repo.source === 'local' && state.repo.work;
+    commitBtn.style.display = canCommit ? '' : 'none';
+  }, 500);
+
+  // ---- 模态框 ----
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'commitModal';
+  modal.innerHTML = `
+    <div class="modal-box" style="width:min(620px,92vw)">
+      <h3>提交更改</h3>
+      <div class="modal-field">
+        <label>变更文件</label>
+        <div id="commitChangesList" style="background:#17171a;border:1px solid var(--border);border-radius:4px;padding:8px 10px;max-height:240px;overflow:auto;font-size:11px;line-height:1.8;color:var(--text-dim)"></div>
+      </div>
+      <div class="modal-field">
+        <label>作者</label>
+        <div style="display:flex;gap:8px">
+          <input id="commitAuthorName" type="text" placeholder="Name" style="flex:1;background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none">
+          <input id="commitAuthorEmail" type="text" placeholder="email@example.com" style="flex:1;background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none">
+        </div>
+      </div>
+      <div class="modal-field">
+        <label>提交信息（Ctrl+Enter 快速提交）</label>
+        <textarea id="commitMessage" rows="3" placeholder="描述本次提交…" style="background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none;resize:vertical;font-family:var(--mono)"></textarea>
+      </div>
+      <div id="commitStatus" style="font-size:11px;color:var(--text-faint);min-height:18px;margin-bottom:4px"></div>
+      <div class="modal-actions">
+        <button class="btn" id="commitCancel">取消</button>
+        <button class="btn accent" id="commitDo" disabled>提交</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const $c = (id) => document.getElementById(id);
+  const listEl = $c('commitChangesList');
+  const statusEl = $c('commitStatus');
+  const msgEl = $c('commitMessage');
+  const nameEl = $c('commitAuthorName');
+  const emailEl = $c('commitAuthorEmail');
+  const doBtn = $c('commitDo');
+
+  // ---- 忽略列表 ----
+  const IGNORE_DIRS = new Set([
+    'node_modules','dist','build','.next','.nuxt','.cache','.parcel-cache',
+    '.venv','venv','env','__pycache__','.pytest_cache','.mypy_cache',
+    'target','.gradle','.idea','.vscode','.DS_Store',
+    'coverage','.nyc_output','out','bin','obj'
+  ]);
+  const IGNORE_FILES = new Set(['.DS_Store','Thumbs.db','desktop.ini']);
+
+  // ---- 工具 ----
+  async function deflate(u8) {
+    const cs = new CompressionStream('deflate');
+    const stream = new Blob([u8]).stream().pipeThrough(cs);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function createObject(repo, typeNum, content) {
+    const typeStr = typeof typeNum === 'number' ? OBJ[typeNum] : typeNum;
+    const header = ENC.encode(typeStr + ' ' + content.length + '\0');
+    const buf = new Uint8Array(header.length + content.length);
+    buf.set(header, 0);
+    buf.set(content, header.length);
+    const sha = hex(await sha1Bytes(buf));
+    const compressed = await deflate(buf);
+    const objDir = await repo.git.getDirectoryHandle('objects', {create:true});
+    const subDir = await objDir.getDirectoryHandle(sha.slice(0,2), {create:true});
+    await writeBytes(subDir, sha.slice(2), compressed);
+    return sha;
+  }
+
+  async function blobSha(bytes) {
+    const header = ENC.encode('blob ' + bytes.length + '\0');
+    const buf = new Uint8Array(header.length + bytes.length);
+    buf.set(header, 0);
+    buf.set(bytes, header.length);
+    return hex(await sha1Bytes(buf));
+  }
+
+  // ---- 扫描工作区 ----
+  async function scanWorktree(root) {
+    const files = new Map();
+    async function walk(dir, prefix) {
+      for await (const [name, h] of dir.entries()) {
+        if (name === '.git') continue;
+        if (prefix === '' && IGNORE_DIRS.has(name)) continue;
+        if (IGNORE_FILES.has(name)) continue;
+        const path = prefix ? prefix + '/' + name : name;
+        if (h.kind === 'directory') {
+          if (IGNORE_DIRS.has(name)) continue;
+          await walk(h, path);
+        } else if (h.kind === 'file') {
+          try {
+            const f = await h.getFile();
+            if (f.size > 50 * 1024 * 1024) {
+              console.warn('[GitDeck-commit] 跳过超大文件:', path, f.size);
+              continue;
+            }
+            files.set(path, new Uint8Array(await f.arrayBuffer()));
+          } catch (e) {
+            console.warn('[GitDeck-commit] 读取失败:', path, e);
+          }
+        }
+      }
+    }
+    await walk(root, '');
+    return files;
+  }
+
+  async function collectTreeFiles(repo, treeSha, prefix, out) {
+    const entries = await repo.treeEntries(treeSha);
+    for (const e of entries) {
+      const path = prefix ? prefix + '/' + e.name : e.name;
+      if (e.type === 'tree') {
+        await collectTreeFiles(repo, e.sha, path, out);
+      } else if (e.type === 'blob') {
+        out.set(path, {sha: e.sha, mode: e.mode});
+      }
+    }
+    return out;
+  }
+
+  // ---- 检测变更 ----
+  async function detectChanges(repo, workDir) {
+    const headSha = repo.headSha;
+    if (!headSha) throw new Error('没有 HEAD commit，无法提交');
+    const commit = await repo.parseCommit(headSha);
+    const treeFiles = await collectTreeFiles(repo, commit.tree, '', new Map());
+    const workFiles = await scanWorktree(workDir);
+
+    const changes = {added: [], modified: [], deleted: []};
+
+    for (const [path, bytes] of workFiles) {
+      const existing = treeFiles.get(path);
+      if (!existing) {
+        changes.added.push({path, bytes});
+      } else {
+        const sha = await blobSha(bytes);
+        if (sha !== existing.sha) {
+          changes.modified.push({path, bytes, oldSha: existing.sha});
+        }
+      }
+    }
+    for (const [path, info] of treeFiles) {
+      if (!workFiles.has(path)) {
+        changes.deleted.push({path, sha: info.sha, mode: info.mode});
+      }
+    }
+    return changes;
+  }
+
+  // ---- 构建 tree ----
+  async function buildTreeFromMap(repo, filesMap) {
+    const root = {children: new Map()};
+    for (const [path, info] of filesMap) {
+      const parts = path.split('/');
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const name = parts[i];
+        if (!node.children.has(name)) {
+          node.children.set(name, {children: new Map(), isTree: true});
+        }
+        const next = node.children.get(name);
+        if (!next.isTree) throw new Error('路径冲突: ' + path);
+        node = next;
+      }
+      const fileName = parts[parts.length - 1];
+      node.children.set(fileName, {
+        sha: info.sha, mode: info.mode || '100644', isTree: false
+      });
+    }
+
+    async function writeTree(node) {
+      const entries = [];
+      for (const [name, child] of node.children) {
+        if (child.isTree) {
+          const childSha = await writeTree(child);
+          entries.push({mode: '40000', name, sha: childSha});
+        } else {
+          entries.push({mode: child.mode, name, sha: child.sha});
+        }
+      }
+      entries.sort((a, b) => {
+        const ka = a.mode === '40000' ? a.name + '/' : a.name;
+        const kb = b.mode === '40000' ? b.name + '/' : b.name;
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+      const parts = [];
+      for (const e of entries) {
+        const modeBytes = ENC.encode(e.mode);
+        const nameBytes = ENC.encode(e.name);
+        const shaBytes = hexToBytes(e.sha);
+        const buf = new Uint8Array(modeBytes.length + 1 + nameBytes.length + 1 + 20);
+        let p = 0;
+        buf.set(modeBytes, p); p += modeBytes.length;
+        buf[p++] = 0x20;
+        buf.set(nameBytes, p); p += nameBytes.length;
+        buf[p++] = 0;
+        buf.set(shaBytes, p); p += 20;
+        parts.push(buf);
+      }
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const content = new Uint8Array(total);
+      let off = 0;
+      for (const p of parts) { content.set(p, off); off += p.length; }
+      return createObject(repo, 2, content);
+    }
+    return writeTree(root);
+  }
+
+  async function createCommitObject(repo, treeSha, parents, message, author) {
+    const now = Math.floor(Date.now() / 1000);
+    const tz = '+0000';
+    const sig = author.name + ' <' + author.email + '> ' + now + ' ' + tz;
+    const lines = [];
+    lines.push('tree ' + treeSha);
+    for (const p of parents) lines.push('parent ' + p);
+    lines.push('author ' + sig);
+    lines.push('committer ' + sig);
+    lines.push('');
+    const content = ENC.encode(lines.join('\n') + '\n' + message + '\n');
+    return createObject(repo, 1, content);
+  }
+
+  async function updateRefFile(repo, ref, sha) {
+    const parts = ref.split('/');
+    let dir = repo.git;
+    for (let i = 0; i < parts.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(parts[i], {create:true});
+    }
+    await writeText(dir, parts[parts.length - 1], sha + '\n');
+  }
+
+  async function performCommit(repo, workDir, message, author, onProgress) {
+    onProgress('检测变更…');
+    const changes = await detectChanges(repo, workDir);
+    const total = changes.added.length + changes.modified.length + changes.deleted.length;
+    if (total === 0) throw new Error('没有需要提交的更改');
+
+    onProgress('读取 HEAD 树…');
+    const headCommit = await repo.parseCommit(repo.headSha);
+    const newFiles = await collectTreeFiles(repo, headCommit.tree, '', new Map());
+
+    let done = 0;
+    for (const f of changes.added) {
+      onProgress('写入 blob ' + (++done) + '/' + total + '…');
+      const sha = await createObject(repo, 3, f.bytes);
+      newFiles.set(f.path, {sha, mode: '100644'});
+    }
+    for (const f of changes.modified) {
+      onProgress('写入 blob ' + (++done) + '/' + total + '…');
+      const sha = await createObject(repo, 3, f.bytes);
+      newFiles.set(f.path, {sha, mode: '100644'});
+    }
+    for (const f of changes.deleted) {
+      newFiles.delete(f.path);
+    }
+
+    onProgress('构建 tree…');
+    const newTreeSha = await buildTreeFromMap(repo, newFiles);
+
+    onProgress('创建 commit…');
+    const newCommitSha = await createCommitObject(
+      repo, newTreeSha, [repo.headSha], message, author
+    );
+
+    onProgress('更新 ref…');
+    await updateRefFile(repo, 'refs/' + repo.headRef, newCommitSha);
+
+    // 更新内存状态
+    const branchName = repo.headRef.replace(/^heads\//, '');
+    repo.refs.branch[branchName] = newCommitSha;
+    repo.objCache.clear();
+    repo.treeCache.clear();
+    repo.commitCache.clear();
+    repo.packs = [];
+
+    return {newCommitSha, count: total};
+  }
+
+  // ---- UI 逻辑 ----
+  function renderChanges(container, changes) {
+    const rows = [];
+    for (const f of changes.added) {
+      rows.push('<div><span style="color:var(--green);font-weight:700;display:inline-block;width:18px">A</span>' + escapeHtml(f.path) + '</div>');
+    }
+    for (const f of changes.modified) {
+      rows.push('<div><span style="color:var(--accent);font-weight:700;display:inline-block;width:18px">M</span>' + escapeHtml(f.path) + '</div>');
+    }
+    for (const f of changes.deleted) {
+      rows.push('<div><span style="color:var(--red);font-weight:700;display:inline-block;width:18px">D</span>' + escapeHtml(f.path) + '</div>');
+    }
+    container.innerHTML = rows.length ? rows.join('') : '<span style="color:var(--text-faint)">没有变更</span>';
+  }
+
+  async function openCommitModal() {
+    if (!state.repo || state.repo.source !== 'local' || !state.repo.work) {
+      showToast('仅本地仓库支持提交');
+      return;
+    }
+    statusEl.textContent = '正在检测变更…';
+    doBtn.disabled = true;
+    listEl.innerHTML = '';
+    msgEl.value = '';
+    modal.classList.add('show');
+    setTimeout(() => msgEl.focus(), 50);
+
+    // 初始化作者信息
+    if (!nameEl.value || !emailEl.value) {
+      try {
+        const o = await state.repo.readObject(state.repo.headSha);
+        const text = TD.decode(o.data);
+        const m = /^author (.*?) <(.*?)> /m.exec(text);
+        if (m) {
+          if (!nameEl.value) nameEl.value = m[1];
+          if (!emailEl.value) emailEl.value = m[2];
+        }
+      } catch {}
+      if (!nameEl.value) nameEl.value = 'GitDeck User';
+      if (!emailEl.value) emailEl.value = 'user@gitdeck.local';
+    }
+
+    try {
+      const changes = await detectChanges(state.repo, state.repo.work);
+      renderChanges(listEl, changes);
+      const total = changes.added.length + changes.modified.length + changes.deleted.length;
+      statusEl.textContent = '共 ' + total + ' 个文件变更';
+      doBtn.disabled = total === 0;
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = '检测失败：' + e.message;
+    }
+  }
+
+  function closeCommitModal() {
+    modal.classList.remove('show');
+  }
+
+  async function doCommit() {
+    const msg = msgEl.value.trim();
+    if (!msg) { statusEl.textContent = '请填写提交信息'; msgEl.focus(); return; }
+    const author = {
+      name: nameEl.value.trim() || 'GitDeck User',
+      email: emailEl.value.trim() || 'user@gitdeck.local'
+    };
+    doBtn.disabled = true;
+    try {
+      const result = await performCommit(
+        state.repo, state.repo.work, msg, author,
+        (m) => { statusEl.textContent = m; }
+      );
+      statusEl.textContent = '提交成功：' + result.newCommitSha.slice(0, 10);
+      showToast('已提交 ' + result.count + ' 个文件');
+      setTimeout(async () => {
+        closeCommitModal();
+        await reload();
+      }, 700);
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = '提交失败：' + e.message;
+      doBtn.disabled = false;
+    }
+  }
+
+  // ---- 事件 ----
+  commitBtn.addEventListener('click', openCommitModal);
+  $c('commitCancel').addEventListener('click', closeCommitModal);
+  $c('commitDo').addEventListener('click', doCommit);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeCommitModal(); });
+  msgEl.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      doCommit();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('show')) {
+      closeCommitModal();
+    }
+  });
+
+  console.log('[GitDeck-commit] 提交功能已启用');
+})();
+
 </script>
 </body>
 </html>
