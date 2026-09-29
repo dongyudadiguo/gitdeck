@@ -196,8 +196,8 @@ body{background:var(--bg);color:var(--text);font:12px/1.5 var(--mono);-webkit-fo
       </div>
     </div>
     <div class="modal-field">
-      <label>CORS 代理 URL（可选 · 跨域时必填）</label>
-      <input id="cloneProxy" type="text" placeholder="https://your-worker.workers.dev" autocomplete="off" spellcheck="false">
+      <label>CORS 代理 URL（留空则用内置同源代理）</label>
+      <input id="cloneProxy" type="text" placeholder="留空即可 — 自动使用 /api/proxy" autocomplete="off" spellcheck="false">
     </div>
     <div class="modal-field">
       <label>克隆到目录</label>
@@ -207,7 +207,7 @@ body{background:var(--bg);color:var(--text);font:12px/1.5 var(--mono);-webkit-fo
       </div>
     </div>
     <div class="modal-hint">
-      <b style="color:var(--text-dim)">浏览器跨域</b>：GitHub 等站点默认不开 CORS，直连会被浏览器拦截。请在 Cloudflare Worker 部署转发脚本（见 <code>worker/</code> 目录），收到 <code>?url=…</code> 后返回带 <code>Access-Control-Allow-Origin: *</code> 的内容，再把 Worker 地址填到上面。
+      <b style="color:var(--text-dim)">无需跨域配置</b>：GitHub 等站点默认不开 CORS，直连会被浏览器拦截。本站已内置 <code>/api/proxy</code>（Cloudflare Pages Function），直接留空即可克隆。
       <br><br>
       <b style="color:var(--text-dim)">磁盘克隆</b>：将在选定目录下创建 <code>.git</code>（含 packfile + idx + refs + config），并检出当前分支的最新工作树，得到一个真正的本地 Git 仓库。
     </div>
@@ -307,7 +307,9 @@ async function writeText(dir,name,text){return writeBytes(dir,name,ENC.encode(te
 function buildPkt(str){const b=ENC.encode(str);return {header:ENC.encode((b.length+4).toString(16).padStart(4,'0')),body:b};}
 async function cloneToDisk(url,proxy,targetDir,onProgress){
   url=url.replace(/\/+$/,'');
-  const proxied=(u)=>proxy?proxy.replace(/\/+$/,'')+'/?url='+encodeURIComponent(u):u;
+  // 优先用用户填的地址；留空则用 Pages 自带的同源代理
+  const effectiveProxy=proxy?proxy.replace(/\/+$/,''):'/api/proxy';
+  const proxied=(u)=>effectiveProxy+'/?url='+encodeURIComponent(u);
   onProgress('获取远程引用…');
   let infoRes;
   try{infoRes=await fetch(proxied(url+'/info/refs?service=git-upload-pack'),{headers:{'Accept':'application/x-git-upload-pack-advertisement'}});}
