@@ -325,11 +325,14 @@ async function cloneToDisk(url,proxy,targetDir,onProgress){
     const clean=text.replace(/\0[\s\S]*$/,'').trim();const m=/^([0-9a-f]{40})\s+(.+)$/.exec(clean);
     if(!m)continue;refs[m[2]]=m[1];if(m[2]==='HEAD')headSha=m[1];
   }
-  const wantShas=[...new Set(Object.values(refs))].filter((s)=>/^[0-9a-f]{40}$/.test(s));
-  if(!wantShas.length)throw new Error('远程仓库没有任何引用');
-  onProgress('构造 upload-pack 请求…');
+  // 只请求 HEAD 或默认分支的一个 SHA，避免多 want 导致 pack 内容不全
+  let primarySha=headSha,primaryRef='HEAD';
+  if(headSha){for(const [n,s] of Object.entries(refs)){if(n.startsWith('refs/heads/')&&s===headSha){primaryRef=n;break;}}}
+  if(!primarySha){const fb=Object.keys(refs).find(n=>n.startsWith('refs/heads/'));if(fb){primaryRef=fb;primarySha=refs[fb];}}
+  if(!primarySha)throw new Error('远程仓库没有任何分支或 HEAD');
+  const wantShas=[primarySha];
+  onProgress('构造 upload-pack 请求（'+primaryRef+'）…');
   const parts=[];const first=buildPkt('want '+wantShas[0]+' ofs-delta no-progress\n');parts.push(first.header,first.body);
-  for(let i=1;i<wantShas.length;i++){const k=buildPkt('want '+wantShas[i]+'\n');parts.push(k.header,k.body);}
   parts.push(ENC.encode('0000'));const done=buildPkt('done\n');parts.push(done.header,done.body);
   let total=0;for(const x of parts)total+=x.length;const reqBody=new Uint8Array(total);let off=0;
   for(const x of parts){reqBody.set(x,off);off+=x.length;}
@@ -384,7 +387,15 @@ async function cloneToDisk(url,proxy,targetDir,onProgress){
   async function parseCommitFromPack(sha){const o=shaToObj.get(sha);if(!o||o.type!=='commit')throw new Error('找不到 commit '+sha);const text=TD.decode(o.data);const sep=text.indexOf('\n\n');const head=sep<0?text:text.slice(0,sep);let tree=null,parents=[];for(const line of head.split('\n')){if(line.startsWith('tree '))tree=line.slice(5).trim();else if(line.startsWith('parent '))parents.push(line.slice(7).trim());}return {sha,tree,parents};}
   async function treeEntriesFromPack(sha){const o=shaToObj.get(sha);if(!o||o.type!=='tree')return [];const d=o.data;const entries=[];let q=0;while(q<d.length){let sp=q;while(d[sp]!==0x20)sp++;const mode=TD.decode(d.subarray(q,sp));q=sp+1;let z=q;while(d[z]!==0)z++;const name=TD.decode(d.subarray(q,z));q=z+1;const oid=hex(d.subarray(q,q+20));q+=20;const type=(mode==='40000'||mode==='040000')?'tree':(mode==='160000'?'commit':'blob');entries.push({mode,name,sha:oid,type});}return entries;}
   async function checkoutTree(dir,treeSha){const entries=await treeEntriesFromPack(treeSha);for(const e of entries){if(e.type==='tree'){const sub=await dir.getDirectoryHandle(e.name,{create:true});await checkoutTree(sub,e.sha);}else if(e.type==='blob'){const o=shaToObj.get(e.sha);if(!o)continue;await writeBytes(dir,e.name,o.data);fileCount++;if(fileCount%200===0)onProgress(`检出工作树… 已写入 ${fileCount} 个文件`);}}}
-  const headCommit=await parseCommitFromPack(headSha);
+  let headCommit;
+  try{headCommit=await parseCommitFromPack(headSha);}
+  catch(e){
+    // headSha 不在 pack 里，从 pack 中任取一个 commit 兜底
+    const anyCommitSha=[...shaToObj.values()].find(o=>o.type==='commit')?.sha;
+    if(!anyCommitSha)throw e;
+    console.warn('headSha '+headSha+' 不在 pack 中，改用 '+anyCommitSha);
+    headCommit=await parseCommitFromPack(anyCommitSha);
+  }
   await checkoutTree(targetDir,headCommit.tree);
   return {gitDir,branchName,fileCount};
 }
