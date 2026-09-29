@@ -1214,6 +1214,429 @@ render();
   console.log('[GitDeck-commit-v2] 现代风格提交对话框已启用');
 })();
 
+
+
+// ============================ 更改视图 ============================
+(async function initChangesView() {
+  if (document.readyState === 'loading') {
+    await new Promise(r => document.addEventListener('DOMContentLoaded', r, {once:true}));
+  }
+  await new Promise(r => setTimeout(r, 250));
+
+  const sidebar = document.getElementById('sidebar');
+  const commitInner = document.querySelector('.commit-inner');
+  const graphEl = document.getElementById('graph');
+  const rowsEl = document.getElementById('rows');
+  const detailHead = document.getElementById('detailHead');
+  const detailBody = document.getElementById('detailBody');
+  if (!sidebar || !commitInner || !graphEl || !rowsEl) {
+    console.warn('[GitDeck-changes] 必要的 DOM 节点缺失'); return;
+  }
+
+  // ---------- 样式 ----------
+  const style = document.createElement('style');
+  style.textContent = `
+    #changesList { padding: 6px 0; }
+    #changesList .row {
+      padding-left: 12px;
+      padding-right: 12px;
+      gap: 10px;
+    }
+    #changesList .row .subject {
+      font-family: var(--mono);
+      font-size: 11.5px;
+    }
+    #changesList .row .author {
+      width: auto;
+      min-width: 60px;
+      font-size: 10.5px;
+      color: var(--text-faint);
+    }
+    #changesList .row.selected {
+      background: linear-gradient(90deg, rgba(255,157,60,.14), rgba(255,157,60,.04));
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .change-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px; height: 18px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 10px;
+      flex-shrink: 0;
+      font-family: var(--mono);
+    }
+    .change-badge.A { background: rgba(126,198,153,.16); color: #7ec699; }
+    .change-badge.M { background: rgba(255,157,60,.16); color: #ff9d3c; }
+    .change-badge.D { background: rgba(224,108,117,.16); color: #e06c75; }
+  `;
+  document.head.appendChild(style);
+
+  // ---------- 状态 ----------
+  const cs = {
+    active: false,
+    loading: false,
+    changes: null,
+    selectedPath: null,
+    timer: null,
+  };
+
+  // ---------- 注入侧栏入口 ----------
+  const changesItem = document.createElement('div');
+  changesItem.className = 'side-item';
+  changesItem.id = 'changesSideItem';
+  changesItem.innerHTML = `
+    <span class="dot" style="background:var(--accent)"></span>
+    <span class="side-name">更改</span>
+    <span class="side-badge" id="changesBadge" style="display:none">0</span>
+  `;
+  const firstTitle = sidebar.querySelector('.side-title');
+  if (firstTitle) sidebar.insertBefore(changesItem, firstTitle);
+  else sidebar.insertBefore(changesItem, sidebar.firstChild);
+
+  // ---------- 注入主区容器 ----------
+  const changesList = document.createElement('div');
+  changesList.id = 'changesList';
+  changesList.style.display = 'none';
+  commitInner.appendChild(changesList);
+
+  // ---------- 扫描工作区 ----------
+  const IGNORE_DIRS = new Set([
+    'node_modules','dist','build','.next','.nuxt','.cache','.parcel-cache',
+    '.venv','venv','env','__pycache__','.pytest_cache','.mypy_cache',
+    'target','.gradle','.idea','.vscode',
+    'coverage','.nyc_output','out','bin','obj'
+  ]);
+  const IGNORE_FILES = new Set(['.DS_Store','Thumbs.db','desktop.ini']);
+
+  async function scanWorktree(root) {
+    const files = new Map();
+    async function walk(dir, prefix) {
+      for await (const [name, h] of dir.entries()) {
+        if (name === '.git') continue;
+        if (prefix === '' && IGNORE_DIRS.has(name)) continue;
+        if (IGNORE_FILES.has(name)) continue;
+        const path = prefix ? prefix + '/' + name : name;
+        if (h.kind === 'directory') {
+          if (IGNORE_DIRS.has(name)) continue;
+          await walk(h, path);
+        } else if (h.kind === 'file') {
+          try {
+            const f = await h.getFile();
+            if (f.size > 50 * 1024 * 1024) continue;
+            files.set(path, new Uint8Array(await f.arrayBuffer()));
+          } catch {}
+        }
+      }
+    }
+    await walk(root, '');
+    return files;
+  }
+
+  async function collectTreeFiles(repo, treeSha, prefix, out) {
+    const entries = await repo.treeEntries(treeSha);
+    for (const e of entries) {
+      const path = prefix ? prefix + '/' + e.name : e.name;
+      if (e.type === 'tree') await collectTreeFiles(repo, e.sha, path, out);
+      else if (e.type === 'blob') out.set(path, { sha: e.sha, mode: e.mode });
+    }
+    return out;
+  }
+
+  async function blobSha(bytes) {
+    const header = ENC.encode('blob ' + bytes.length + '\0');
+    const buf = new Uint8Array(header.length + bytes.length);
+    buf.set(header, 0);
+    buf.set(bytes, header.length);
+    return hex(await sha1Bytes(buf));
+  }
+
+  async function detectChanges(repo) {
+    const headSha = repo.headSha;
+    if (!headSha) return { added: [], modified: [], deleted: [] };
+    const commit = await repo.parseCommit(headSha);
+    const treeFiles = await collectTreeFiles(repo, commit.tree, '', new Map());
+    const workFiles = await scanWorktree(repo.work);
+
+    const changes = { added: [], modified: [], deleted: [] };
+    for (const [path, bytes] of workFiles) {
+      const existing = treeFiles.get(path);
+      if (!existing) changes.added.push({ path, bytes });
+      else {
+        const sha = await blobSha(bytes);
+        if (sha !== existing.sha) {
+          changes.modified.push({ path, bytes, oldSha: existing.sha });
+        }
+      }
+    }
+    for (const [path, info] of treeFiles) {
+      if (!workFiles.has(path)) {
+        changes.deleted.push({ path, sha: info.sha, mode: info.mode });
+      }
+    }
+    return changes;
+  }
+
+  // ---------- 渲染 ----------
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    return (n/1048576).toFixed(1) + ' MB';
+  }
+
+  function isFileBinary(bytes) {
+    const n = Math.min(bytes.length, 8000);
+    for (let i = 0; i < n; i++) if (bytes[i] === 0) return true;
+    return false;
+  }
+
+  function renderList() {
+    if (!cs.active) return;
+    const ch = cs.changes || { added: [], modified: [], deleted: [] };
+
+    function rowHTML(kind, file) {
+      const selected = cs.selectedPath === file.path ? ' selected' : '';
+      const size = file.bytes ? fmtSize(file.bytes.length) : '';
+      return `
+        <div class="row change-row${selected}" data-path="${escapeHtml(file.path)}" data-kind="${kind}">
+          <span class="change-badge ${kind}">${kind}</span>
+          <span class="subject">${escapeHtml(file.path)}</span>
+          <span class="author">${size}</span>
+        </div>`;
+    }
+
+    const rows = [];
+    for (const f of ch.modified) rows.push(rowHTML('M', f));
+    for (const f of ch.added)    rows.push(rowHTML('A', f));
+    for (const f of ch.deleted)  rows.push(rowHTML('D', f));
+
+    if (!rows.length) {
+      changesList.innerHTML = '<div class="empty">工作区干净，没有未提交的更改</div>';
+    } else {
+      changesList.innerHTML = rows.join('');
+    }
+  }
+
+  async function renderFileDiff(path, kind) {
+    const repo = state.repo;
+    if (!repo) return;
+    const ch = cs.changes;
+    let file = null;
+    if (kind === 'A') file = ch.added.find(f => f.path === path);
+    else if (kind === 'M') file = ch.modified.find(f => f.path === path);
+    else if (kind === 'D') file = ch.deleted.find(f => f.path === path);
+    if (!file) {
+      detailHead.innerHTML = '';
+      detailBody.innerHTML = '<div class="empty">文件不存在</div>';
+      return;
+    }
+
+    const badgeColor = kind === 'A' ? 'var(--green)'
+                     : kind === 'M' ? 'var(--accent)' : 'var(--red)';
+    detailHead.innerHTML = `
+      <div class="d-subject" style="display:flex;align-items:center;gap:10px;font-family:var(--mono)">
+        <span class="change-badge ${kind}" style="width:20px;height:20px;font-size:11px">${kind}</span>
+        <span style="font-weight:500">${escapeHtml(path)}</span>
+      </div>
+      <div class="d-meta">
+        <span style="color:var(--accent);font-size:11px">● 未提交的更改</span>
+        ${file.bytes ? `<span>${fmtSize(file.bytes.length)}</span>` : ''}
+      </div>`;
+
+    detailBody.innerHTML = '<div class="empty">正在计算差异…</div>';
+
+    try {
+      // 二进制检测
+      if (kind !== 'A' && isFileBinary(await getOldBlob(repo, file, kind))) {
+        detailBody.innerHTML = '<div class="empty">二进制文件，无法显示差异</div>';
+        return;
+      }
+      if (kind !== 'D' && file.bytes && isFileBinary(file.bytes)) {
+        detailBody.innerHTML = '<div class="empty">二进制文件，无法显示差异</div>';
+        return;
+      }
+
+      let oldText = '';
+      let newText = '';
+      if (kind !== 'A') {
+        const oldSha = kind === 'D' ? file.sha : file.oldSha;
+        const obj = await repo.readObject(oldSha);
+        oldText = TD.decode(obj.data);
+      }
+      if (kind !== 'D') newText = TD.decode(file.bytes);
+
+      const diff = diffLines(oldText, newText);
+      const hunks = buildHunks(diff.ops, diff.a, diff.b);
+
+      let addCount = 0, delCount = 0;
+      for (const h of hunks) {
+        for (const l of h.lines) {
+          if (l.type === 'add') addCount++;
+          else if (l.type === 'del') delCount++;
+        }
+      }
+
+      if (!hunks.length) {
+        detailBody.innerHTML = '<div class="empty">没有行级差异（可能只有模式变更）</div>';
+        return;
+      }
+
+      detailBody.innerHTML = `
+        <div class="file-block">
+          <div class="file-head">
+            <span class="file-status ${kind}">${kind}</span>
+            <span class="file-path">${escapeHtml(path)}</span>
+            <span class="file-stat"><span class="add">+${addCount}</span> <span class="del">−${delCount}</span></span>
+          </div>
+          ${renderDiffBody(hunks)}
+        </div>`;
+    } catch (e) {
+      console.error(e);
+      detailBody.innerHTML = `<div class="empty">计算差异失败：${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  async function getOldBlob(repo, file, kind) {
+    const oldSha = kind === 'D' ? file.sha : file.oldSha;
+    if (!oldSha) return new Uint8Array(0);
+    const obj = await repo.readObject(oldSha);
+    return obj.data;
+  }
+
+  // ---------- 视图切换 ----------
+  function setView(active) {
+    cs.active = active;
+    if (active) {
+      graphEl.style.display = 'none';
+      rowsEl.style.display = 'none';
+      changesList.style.display = '';
+      changesItem.classList.add('active');
+    } else {
+      graphEl.style.display = '';
+      rowsEl.style.display = '';
+      changesList.style.display = 'none';
+      changesItem.classList.remove('active');
+    }
+  }
+
+  function updateBadge() {
+    const badge = document.getElementById('changesBadge');
+    if (!badge) return;
+    const ch = cs.changes;
+    if (!ch) { badge.style.display = 'none'; return; }
+    const total = ch.added.length + ch.modified.length + ch.deleted.length;
+    if (total > 0) {
+      badge.textContent = String(total);
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  async function refreshChanges(auto = false) {
+    if (!state.repo || state.repo.source !== 'local' || !state.repo.work
+        || state.repo.work.name === '.git') {
+      cs.changes = { added: [], modified: [], deleted: [] };
+      updateBadge();
+      if (cs.active) {
+        changesList.innerHTML = '<div class="empty">当前仓库不支持更改视图（仅本地工作区可用）</div>';
+        detailHead.innerHTML = '';
+        detailBody.innerHTML = '<div class="empty">选择一个提交查看差异</div>';
+      }
+      return;
+    }
+    if (cs.loading) return;
+    cs.loading = true;
+    if (cs.active && !auto) {
+      changesList.innerHTML = '<div class="empty">正在检测变更…</div>';
+    }
+    try {
+      const changes = await detectChanges(state.repo);
+      cs.changes = changes;
+      updateBadge();
+      if (cs.active) {
+        // 检查当前选中文件是否还在变更里
+        const all = [...changes.modified, ...changes.added, ...changes.deleted];
+        if (cs.selectedPath && !all.find(f => f.path === cs.selectedPath)) {
+          cs.selectedPath = null;
+        }
+        renderList();
+        if (cs.selectedPath) {
+          const f = all.find(x => x.path === cs.selectedPath);
+          if (f) {
+            const kind = changes.modified.includes(f) ? 'M'
+                       : changes.added.includes(f) ? 'A' : 'D';
+            // 只在文件内容变化时重绘（避免闪烁）
+            // 简化处理：直接重绘
+            await renderFileDiff(cs.selectedPath, kind);
+          }
+        } else if (!auto) {
+          detailHead.innerHTML = '';
+          detailBody.innerHTML = '<div class="empty">选择一个文件查看差异</div>';
+        }
+      }
+    } catch (e) {
+      console.error('[GitDeck-changes]', e);
+      if (cs.active) {
+        changesList.innerHTML = `<div class="empty">检测失败：${escapeHtml(e.message)}</div>`;
+      }
+    } finally {
+      cs.loading = false;
+    }
+  }
+
+  // ---------- 事件 ----------
+  changesItem.addEventListener('click', async () => {
+    if (cs.active) return;
+    setView(true);
+    cs.selectedPath = null;
+    detailHead.innerHTML = '';
+    detailBody.innerHTML = '<div class="empty">选择一个文件查看差异</div>';
+    await refreshChanges();
+  });
+
+  changesList.addEventListener('click', (e) => {
+    const row = e.target.closest('.change-row');
+    if (!row) return;
+    const path = row.dataset.path;
+    const kind = row.dataset.kind;
+    cs.selectedPath = path;
+    renderList();
+    renderFileDiff(path, kind);
+  });
+
+  // 点击侧栏的分支/tag → 切回历史视图
+  sidebar.addEventListener('click', (e) => {
+    const el = e.target.closest('.side-item[data-branch]');
+    if (el && cs.active) setView(false);
+  });
+
+  // 点击提交列表 → 切回历史视图
+  rowsEl.addEventListener('click', () => {
+    if (cs.active) setView(false);
+  });
+
+  // 每 2 秒自动刷新（仅当更改视图激活）
+  cs.timer = setInterval(() => {
+    if (cs.active) refreshChanges(true);
+  }, 2000);
+
+  // 初次启动：更新角标
+  setTimeout(() => {
+    // 等原始 render 完成
+    const check = setInterval(() => {
+      if (state.repo) {
+        clearInterval(check);
+        refreshChanges(true);
+      }
+    }, 300);
+    setTimeout(() => clearInterval(check), 10000);
+  }, 500);
+
+  console.log('[GitDeck-changes] 更改视图已启用');
+})();
+
 </script>
 </body>
 </html>
