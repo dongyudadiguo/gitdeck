@@ -472,15 +472,19 @@ renderSidebar();
 render();
 
 
-// ============================ 提交功能 ============================
-(async function initCommitFeature() {
+
+
+
+
+// ============================ 提交功能（v2 现代风格） ============================
+(async function initCommitFeatureV2() {
   if (document.readyState === 'loading') {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r, {once:true}));
   }
   await new Promise(r => setTimeout(r, 150));
 
   const tbRight = document.querySelector('.tb-right');
-  if (!tbRight) { console.warn('[GitDeck-commit] .tb-right 未找到'); return; }
+  if (!tbRight) { console.warn('[GitDeck-commit-v2] .tb-right 未找到'); return; }
 
   // ---- 顶栏按钮 ----
   const commitBtn = document.createElement('button');
@@ -490,55 +494,389 @@ render();
   commitBtn.style.display = 'none';
   tbRight.insertBefore(commitBtn, tbRight.firstChild);
 
-  // 每 500ms 检查一次状态，决定按钮是否显示
   setInterval(() => {
-    const canCommit = state.repo && state.repo.source === 'local' && state.repo.work;
-    commitBtn.style.display = canCommit ? '' : 'none';
+    const ok = state.repo && state.repo.source === 'local' && state.repo.work;
+    commitBtn.style.display = ok ? '' : 'none';
   }, 500);
+
+  // ---- 样式 ----
+  const style = document.createElement('style');
+  style.textContent = `
+    /* 遮罩：轻柔模糊 */
+    #commitModal {
+      background: rgba(15,15,18,.72);
+      backdrop-filter: blur(6px) saturate(120%);
+      -webkit-backdrop-filter: blur(6px) saturate(120%);
+    }
+    #commitModal.show { animation: cmFadeIn .18s ease-out; }
+    @keyframes cmFadeIn { from { opacity:0 } to { opacity:1 } }
+
+    /* 卡片主体 */
+    .cm-card {
+      background: linear-gradient(180deg, #26262c 0%, #222228 100%);
+      border: 1px solid #3a3a44;
+      border-radius: 12px;
+      width: min(640px, 94vw);
+      max-height: 88vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0,0,0,.65), 0 2px 0 rgba(255,255,255,.03) inset;
+      animation: cmSlideUp .22s cubic-bezier(.2,.9,.3,1);
+    }
+    @keyframes cmSlideUp {
+      from { transform: translateY(12px); opacity: 0 }
+      to { transform: translateY(0); opacity: 1 }
+    }
+
+    /* 头部 */
+    .cm-header {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid #2e2e36;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .cm-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #f2f2f6;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: -.2px;
+    }
+    .cm-title-icon {
+      width: 22px; height: 22px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #ff9d3c, #ff7a1a);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+      color: #1c1c1f;
+      font-weight: 700;
+    }
+    .cm-branch {
+      font-size: 11px;
+      color: #8a8a92;
+      background: #1e1e24;
+      border: 1px solid #34343c;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: var(--mono);
+    }
+
+    /* 滚动区 */
+    .cm-body {
+      padding: 20px 24px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .cm-body::-webkit-scrollbar { width: 8px }
+    .cm-body::-webkit-scrollbar-thumb {
+      background: #3a3a44; border-radius: 4px;
+    }
+
+    /* 区块标签 */
+    .cm-label {
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: #6a6a72;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    /* 统计徽章行 */
+    .cm-stats {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .cm-stat {
+      flex: 1;
+      background: #1e1e24;
+      border: 1px solid #2e2e36;
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: border-color .15s, background .15s;
+    }
+    .cm-stat:hover { background: #222229; border-color: #3a3a44 }
+    .cm-stat .n {
+      font-size: 20px;
+      font-weight: 700;
+      font-family: var(--mono);
+      line-height: 1;
+    }
+    .cm-stat .l {
+      font-size: 11px;
+      color: #8a8a92;
+    }
+    .cm-stat.add .n { color: #7ec699 }
+    .cm-stat.mod .n { color: #ff9d3c }
+    .cm-stat.del .n { color: #e06c75 }
+    .cm-stat.add { border-color: rgba(126,198,153,.25) }
+    .cm-stat.mod { border-color: rgba(255,157,60,.25) }
+    .cm-stat.del { border-color: rgba(224,108,117,.25) }
+
+    /* 文件列表 */
+    .cm-files {
+      background: #1a1a1f;
+      border: 1px solid #2e2e36;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 18px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .cm-files::-webkit-scrollbar { width: 8px }
+    .cm-files::-webkit-scrollbar-thumb { background: #3a3a44; border-radius: 4px }
+
+    .cm-file {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-family: var(--mono);
+      border-bottom: 1px solid #232329;
+      transition: background .1s;
+    }
+    .cm-file:last-child { border-bottom: none }
+    .cm-file:hover { background: #212128 }
+    .cm-file .badge {
+      width: 18px; height: 18px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+    .cm-file .badge.A { background: rgba(126,198,153,.15); color: #7ec699 }
+    .cm-file .badge.M { background: rgba(255,157,60,.15); color: #ff9d3c }
+    .cm-file .badge.D { background: rgba(224,108,117,.15); color: #e06c75 }
+    .cm-file .path {
+      color: #c8c8d0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cm-empty {
+      padding: 24px;
+      text-align: center;
+      color: #6a6a72;
+      font-size: 12px;
+    }
+
+    /* 表单字段 */
+    .cm-field { margin-bottom: 16px }
+    .cm-input, .cm-textarea {
+      width: 100%;
+      background: #1a1a1f;
+      border: 1px solid #2e2e36;
+      color: #e6e6ec;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font: inherit;
+      font-family: var(--mono);
+      font-size: 12px;
+      outline: none;
+      transition: border-color .15s, background .15s, box-shadow .15s;
+      box-sizing: border-box;
+    }
+    .cm-input:focus, .cm-textarea:focus {
+      border-color: #ff9d3c;
+      background: #1c1c22;
+      box-shadow: 0 0 0 3px rgba(255,157,60,.12);
+    }
+    .cm-input::placeholder, .cm-textarea::placeholder { color: #55555c }
+    .cm-textarea {
+      resize: vertical;
+      min-height: 68px;
+      line-height: 1.55;
+    }
+    .cm-author-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    /* 页脚 */
+    .cm-footer {
+      padding: 14px 24px;
+      border-top: 1px solid #2e2e36;
+      background: #1e1e23;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .cm-status {
+      font-size: 11px;
+      color: #8a8a92;
+      flex: 1;
+      min-height: 16px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cm-status.ok { color: #7ec699 }
+    .cm-status.err { color: #e06c75 }
+    .cm-actions { display: flex; gap: 8px; flex-shrink: 0 }
+
+    .cm-btn {
+      padding: 8px 18px;
+      border-radius: 8px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid #34343c;
+      background: #26262c;
+      color: #c8c8d0;
+      transition: all .12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cm-btn:hover:not(:disabled) {
+      background: #2e2e36;
+      color: #f0f0f4;
+    }
+    .cm-btn.primary {
+      background: linear-gradient(180deg, #ffa84d, #ff9d3c);
+      border-color: #ff9d3c;
+      color: #1c1c1f;
+      font-weight: 600;
+      box-shadow: 0 2px 8px rgba(255,157,60,.25);
+    }
+    .cm-btn.primary:hover:not(:disabled) {
+      background: linear-gradient(180deg, #ffb257, #ffa347);
+      box-shadow: 0 4px 12px rgba(255,157,60,.35);
+      transform: translateY(-1px);
+    }
+    .cm-btn.primary:active:not(:disabled) { transform: translateY(0) }
+    .cm-btn:disabled { opacity: .4; cursor: not-allowed }
+
+    /* Loading spinner */
+    .cm-spin {
+      width: 12px; height: 12px;
+      border: 2px solid rgba(0,0,0,.15);
+      border-top-color: #1c1c1f;
+      border-radius: 50%;
+      animation: cmSpin .7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes cmSpin { to { transform: rotate(360deg) } }
+
+    /* 快捷键提示 */
+    .cm-kbd {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-family: var(--mono);
+      background: #2e2e36;
+      border: 1px solid #3a3a44;
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      color: #a8a8b0;
+      line-height: 14px;
+    }
+
+    /* 窄屏适配 */
+    @media (max-width: 600px) {
+      .cm-author-row { grid-template-columns: 1fr }
+      .cm-stats { flex-direction: column }
+      .cm-footer { flex-direction: column; align-items: stretch }
+      .cm-actions { justify-content: flex-end }
+    }
+  `;
+  document.head.appendChild(style);
 
   // ---- 模态框 ----
   const modal = document.createElement('div');
   modal.className = 'modal';
   modal.id = 'commitModal';
   modal.innerHTML = `
-    <div class="modal-box" style="width:min(620px,92vw)">
-      <h3>提交更改</h3>
-      <div class="modal-field">
-        <label>变更文件</label>
-        <div id="commitChangesList" style="background:#17171a;border:1px solid var(--border);border-radius:4px;padding:8px 10px;max-height:240px;overflow:auto;font-size:11px;line-height:1.8;color:var(--text-dim)"></div>
+    <div class="cm-card">
+      <div class="cm-header">
+        <div class="cm-title">
+          <span class="cm-title-icon">◆</span>
+          <span>提交更改</span>
+        </div>
+        <span class="cm-branch" id="cmBranch">—</span>
       </div>
-      <div class="modal-field">
-        <label>作者</label>
-        <div style="display:flex;gap:8px">
-          <input id="commitAuthorName" type="text" placeholder="Name" style="flex:1;background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none">
-          <input id="commitAuthorEmail" type="text" placeholder="email@example.com" style="flex:1;background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none">
+
+      <div class="cm-body">
+        <div class="cm-label">变更概览</div>
+        <div class="cm-stats">
+          <div class="cm-stat add">
+            <span class="n" id="cmStatA">0</span>
+            <span class="l">新增</span>
+          </div>
+          <div class="cm-stat mod">
+            <span class="n" id="cmStatM">0</span>
+            <span class="l">修改</span>
+          </div>
+          <div class="cm-stat del">
+            <span class="n" id="cmStatD">0</span>
+            <span class="l">删除</span>
+          </div>
+        </div>
+
+        <div class="cm-label">文件列表</div>
+        <div class="cm-files" id="cmFiles">
+          <div class="cm-empty">正在检测变更…</div>
+        </div>
+
+        <div class="cm-label">作者</div>
+        <div class="cm-author-row cm-field">
+          <input class="cm-input" id="cmAuthorName" type="text" placeholder="你的名字" autocomplete="off" spellcheck="false">
+          <input class="cm-input" id="cmAuthorEmail" type="text" placeholder="you@example.com" autocomplete="off" spellcheck="false">
+        </div>
+
+        <div class="cm-label">
+          提交信息
+          <span style="text-transform:none;letter-spacing:0;color:#55555c;font-weight:400;margin-left:6px">
+            <span class="cm-kbd">Ctrl</span> + <span class="cm-kbd">Enter</span> 快速提交
+          </span>
+        </div>
+        <div class="cm-field">
+          <textarea class="cm-textarea" id="cmMessage" rows="3" placeholder="简要描述这次提交…"></textarea>
         </div>
       </div>
-      <div class="modal-field">
-        <label>提交信息（Ctrl+Enter 快速提交）</label>
-        <textarea id="commitMessage" rows="3" placeholder="描述本次提交…" style="background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none;resize:vertical;font-family:var(--mono)"></textarea>
-      </div>
-      <div id="commitStatus" style="font-size:11px;color:var(--text-faint);min-height:18px;margin-bottom:4px"></div>
-      <div class="modal-actions">
-        <button class="btn" id="commitCancel">取消</button>
-        <button class="btn accent" id="commitDo" disabled>提交</button>
+
+      <div class="cm-footer">
+        <div class="cm-status" id="cmStatus"></div>
+        <div class="cm-actions">
+          <button class="cm-btn" id="cmCancel">取消</button>
+          <button class="cm-btn primary" id="cmDo" disabled>提交</button>
+        </div>
       </div>
     </div>`;
   document.body.appendChild(modal);
 
   const $c = (id) => document.getElementById(id);
-  const listEl = $c('commitChangesList');
-  const statusEl = $c('commitStatus');
-  const msgEl = $c('commitMessage');
-  const nameEl = $c('commitAuthorName');
-  const emailEl = $c('commitAuthorEmail');
-  const doBtn = $c('commitDo');
+  const filesEl = $c('cmFiles');
+  const statusEl = $c('cmStatus');
+  const msgEl = $c('cmMessage');
+  const nameEl = $c('cmAuthorName');
+  const emailEl = $c('cmAuthorEmail');
+  const doBtn = $c('cmDo');
+  const statA = $c('cmStatA');
+  const statM = $c('cmStatM');
+  const statD = $c('cmStatD');
+  const branchEl = $c('cmBranch');
 
   // ---- 忽略列表 ----
   const IGNORE_DIRS = new Set([
     'node_modules','dist','build','.next','.nuxt','.cache','.parcel-cache',
     '.venv','venv','env','__pycache__','.pytest_cache','.mypy_cache',
-    'target','.gradle','.idea','.vscode','.DS_Store',
+    'target','.gradle','.idea','.vscode',
     'coverage','.nyc_output','out','bin','obj'
   ]);
   const IGNORE_FILES = new Set(['.DS_Store','Thumbs.db','desktop.ini']);
@@ -572,7 +910,6 @@ render();
     return hex(await sha1Bytes(buf));
   }
 
-  // ---- 扫描工作区 ----
   async function scanWorktree(root) {
     const files = new Map();
     async function walk(dir, prefix) {
@@ -587,14 +924,9 @@ render();
         } else if (h.kind === 'file') {
           try {
             const f = await h.getFile();
-            if (f.size > 50 * 1024 * 1024) {
-              console.warn('[GitDeck-commit] 跳过超大文件:', path, f.size);
-              continue;
-            }
+            if (f.size > 50 * 1024 * 1024) continue;
             files.set(path, new Uint8Array(await f.arrayBuffer()));
-          } catch (e) {
-            console.warn('[GitDeck-commit] 读取失败:', path, e);
-          }
+          } catch {}
         }
       }
     }
@@ -606,16 +938,12 @@ render();
     const entries = await repo.treeEntries(treeSha);
     for (const e of entries) {
       const path = prefix ? prefix + '/' + e.name : e.name;
-      if (e.type === 'tree') {
-        await collectTreeFiles(repo, e.sha, path, out);
-      } else if (e.type === 'blob') {
-        out.set(path, {sha: e.sha, mode: e.mode});
-      }
+      if (e.type === 'tree') await collectTreeFiles(repo, e.sha, path, out);
+      else if (e.type === 'blob') out.set(path, {sha: e.sha, mode: e.mode});
     }
     return out;
   }
 
-  // ---- 检测变更 ----
   async function detectChanges(repo, workDir) {
     const headSha = repo.headSha;
     if (!headSha) throw new Error('没有 HEAD commit，无法提交');
@@ -627,24 +955,18 @@ render();
 
     for (const [path, bytes] of workFiles) {
       const existing = treeFiles.get(path);
-      if (!existing) {
-        changes.added.push({path, bytes});
-      } else {
+      if (!existing) changes.added.push({path, bytes});
+      else {
         const sha = await blobSha(bytes);
-        if (sha !== existing.sha) {
-          changes.modified.push({path, bytes, oldSha: existing.sha});
-        }
+        if (sha !== existing.sha) changes.modified.push({path, bytes, oldSha: existing.sha});
       }
     }
     for (const [path, info] of treeFiles) {
-      if (!workFiles.has(path)) {
-        changes.deleted.push({path, sha: info.sha, mode: info.mode});
-      }
+      if (!workFiles.has(path)) changes.deleted.push({path, sha: info.sha, mode: info.mode});
     }
     return changes;
   }
 
-  // ---- 构建 tree ----
   async function buildTreeFromMap(repo, filesMap) {
     const root = {children: new Map()};
     for (const [path, info] of filesMap) {
@@ -652,17 +974,13 @@ render();
       let node = root;
       for (let i = 0; i < parts.length - 1; i++) {
         const name = parts[i];
-        if (!node.children.has(name)) {
-          node.children.set(name, {children: new Map(), isTree: true});
-        }
+        if (!node.children.has(name)) node.children.set(name, {children: new Map(), isTree: true});
         const next = node.children.get(name);
         if (!next.isTree) throw new Error('路径冲突: ' + path);
         node = next;
       }
       const fileName = parts[parts.length - 1];
-      node.children.set(fileName, {
-        sha: info.sha, mode: info.mode || '100644', isTree: false
-      });
+      node.children.set(fileName, {sha: info.sha, mode: info.mode || '100644', isTree: false});
     }
 
     async function writeTree(node) {
@@ -671,9 +989,7 @@ render();
         if (child.isTree) {
           const childSha = await writeTree(child);
           entries.push({mode: '40000', name, sha: childSha});
-        } else {
-          entries.push({mode: child.mode, name, sha: child.sha});
-        }
+        } else entries.push({mode: child.mode, name, sha: child.sha});
       }
       entries.sort((a, b) => {
         const ka = a.mode === '40000' ? a.name + '/' : a.name;
@@ -748,9 +1064,7 @@ render();
       const sha = await createObject(repo, 3, f.bytes);
       newFiles.set(f.path, {sha, mode: '100644'});
     }
-    for (const f of changes.deleted) {
-      newFiles.delete(f.path);
-    }
+    for (const f of changes.deleted) newFiles.delete(f.path);
 
     onProgress('构建 tree…');
     const newTreeSha = await buildTreeFromMap(repo, newFiles);
@@ -763,7 +1077,6 @@ render();
     onProgress('更新 ref…');
     await updateRefFile(repo, 'refs/' + repo.headRef, newCommitSha);
 
-    // 更新内存状态
     const branchName = repo.headRef.replace(/^heads\//, '');
     repo.refs.branch[branchName] = newCommitSha;
     repo.objCache.clear();
@@ -775,18 +1088,27 @@ render();
   }
 
   // ---- UI 逻辑 ----
-  function renderChanges(container, changes) {
+  function setStatus(msg, type) {
+    statusEl.className = 'cm-status' + (type ? ' ' + type : '');
+    statusEl.textContent = msg || '';
+  }
+
+  function renderChanges(changes) {
+    statA.textContent = changes.added.length;
+    statM.textContent = changes.modified.length;
+    statD.textContent = changes.deleted.length;
+
     const rows = [];
     for (const f of changes.added) {
-      rows.push('<div><span style="color:var(--green);font-weight:700;display:inline-block;width:18px">A</span>' + escapeHtml(f.path) + '</div>');
+      rows.push('<div class="cm-file"><span class="badge A">A</span><span class="path">' + escapeHtml(f.path) + '</span></div>');
     }
     for (const f of changes.modified) {
-      rows.push('<div><span style="color:var(--accent);font-weight:700;display:inline-block;width:18px">M</span>' + escapeHtml(f.path) + '</div>');
+      rows.push('<div class="cm-file"><span class="badge M">M</span><span class="path">' + escapeHtml(f.path) + '</span></div>');
     }
     for (const f of changes.deleted) {
-      rows.push('<div><span style="color:var(--red);font-weight:700;display:inline-block;width:18px">D</span>' + escapeHtml(f.path) + '</div>');
+      rows.push('<div class="cm-file"><span class="badge D">D</span><span class="path">' + escapeHtml(f.path) + '</span></div>');
     }
-    container.innerHTML = rows.length ? rows.join('') : '<span style="color:var(--text-faint)">没有变更</span>';
+    filesEl.innerHTML = rows.length ? rows.join('') : '<div class="cm-empty">工作区干净，没有需要提交的更改</div>';
   }
 
   async function openCommitModal() {
@@ -794,14 +1116,19 @@ render();
       showToast('仅本地仓库支持提交');
       return;
     }
-    statusEl.textContent = '正在检测变更…';
     doBtn.disabled = true;
-    listEl.innerHTML = '';
+    doBtn.innerHTML = '提交';
     msgEl.value = '';
+    filesEl.innerHTML = '<div class="cm-empty">正在检测变更…</div>';
+    statA.textContent = '0';
+    statM.textContent = '0';
+    statD.textContent = '0';
+    setStatus('');
+    branchEl.textContent = state.repo.headName || '—';
     modal.classList.add('show');
-    setTimeout(() => msgEl.focus(), 50);
+    setTimeout(() => msgEl.focus(), 60);
 
-    // 初始化作者信息
+    // 从 HEAD commit 里读作者
     if (!nameEl.value || !emailEl.value) {
       try {
         const o = await state.repo.readObject(state.repo.headSha);
@@ -818,13 +1145,18 @@ render();
 
     try {
       const changes = await detectChanges(state.repo, state.repo.work);
-      renderChanges(listEl, changes);
+      renderChanges(changes);
       const total = changes.added.length + changes.modified.length + changes.deleted.length;
-      statusEl.textContent = '共 ' + total + ' 个文件变更';
-      doBtn.disabled = total === 0;
+      if (total === 0) {
+        setStatus('没有需要提交的更改');
+        doBtn.disabled = true;
+      } else {
+        setStatus('共 ' + total + ' 个文件待提交');
+        doBtn.disabled = false;
+      }
     } catch (e) {
       console.error(e);
-      statusEl.textContent = '检测失败：' + e.message;
+      setStatus('检测失败：' + e.message, 'err');
     }
   }
 
@@ -834,34 +1166,40 @@ render();
 
   async function doCommit() {
     const msg = msgEl.value.trim();
-    if (!msg) { statusEl.textContent = '请填写提交信息'; msgEl.focus(); return; }
+    if (!msg) {
+      setStatus('请填写提交信息', 'err');
+      msgEl.focus();
+      return;
+    }
     const author = {
       name: nameEl.value.trim() || 'GitDeck User',
       email: emailEl.value.trim() || 'user@gitdeck.local'
     };
     doBtn.disabled = true;
+    doBtn.innerHTML = '<span class="cm-spin"></span> 提交中';
     try {
       const result = await performCommit(
         state.repo, state.repo.work, msg, author,
-        (m) => { statusEl.textContent = m; }
+        (m) => setStatus(m)
       );
-      statusEl.textContent = '提交成功：' + result.newCommitSha.slice(0, 10);
+      setStatus('提交成功 · ' + result.newCommitSha.slice(0, 10), 'ok');
       showToast('已提交 ' + result.count + ' 个文件');
       setTimeout(async () => {
         closeCommitModal();
         await reload();
-      }, 700);
+      }, 800);
     } catch (e) {
       console.error(e);
-      statusEl.textContent = '提交失败：' + e.message;
+      setStatus('提交失败：' + e.message, 'err');
       doBtn.disabled = false;
+      doBtn.innerHTML = '提交';
     }
   }
 
   // ---- 事件 ----
   commitBtn.addEventListener('click', openCommitModal);
-  $c('commitCancel').addEventListener('click', closeCommitModal);
-  $c('commitDo').addEventListener('click', doCommit);
+  $c('cmCancel').addEventListener('click', closeCommitModal);
+  doBtn.addEventListener('click', doCommit);
   modal.addEventListener('click', (e) => { if (e.target === modal) closeCommitModal(); });
   msgEl.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -870,12 +1208,10 @@ render();
     }
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal.classList.contains('show')) {
-      closeCommitModal();
-    }
+    if (e.key === 'Escape' && modal.classList.contains('show')) closeCommitModal();
   });
 
-  console.log('[GitDeck-commit] 提交功能已启用');
+  console.log('[GitDeck-commit-v2] 现代风格提交对话框已启用');
 })();
 
 </script>
