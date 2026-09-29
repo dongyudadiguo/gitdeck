@@ -1637,6 +1637,1024 @@ render();
   console.log('[GitDeck-changes] 更改视图已启用');
 })();
 
+
+
+// ============================ 拉取功能 ============================
+(async function initPullFeature() {
+  if (document.readyState === 'loading') {
+    await new Promise(r => document.addEventListener('DOMContentLoaded', r, {once:true}));
+  }
+  await new Promise(r => setTimeout(r, 300));
+
+  const tbRight = document.querySelector('.tb-right');
+  if (!tbRight) { console.warn('[GitDeck-pull] .tb-right 未找到'); return; }
+
+  // ---------- 顶栏按钮 ----------
+  const pullBtn = document.createElement('button');
+  pullBtn.className = 'btn';
+  pullBtn.id = 'pullBtn';
+  pullBtn.textContent = '拉取';
+  pullBtn.style.display = 'none';
+  tbRight.insertBefore(pullBtn, tbRight.firstChild);
+
+  // 拉取状态角标
+  const pullBadge = document.createElement('span');
+  pullBadge.id = 'pullBadge';
+  pullBadge.style.cssText =
+    'display:none;padding:2px 7px;border-radius:10px;font-size:10px;' +
+    'font-weight:700;background:#ff9d3c;color:#1c1c1f;margin-right:4px;';
+  pullBtn.appendChild(pullBadge);
+
+  setInterval(() => {
+    const canPull = state.repo && state.repo.source === 'local' && state.repo.work;
+    pullBtn.style.display = canPull ? '' : 'none';
+  }, 500);
+
+  // ---------- 样式 ----------
+  const style = document.createElement('style');
+  style.textContent = `
+    #pullModal { background: rgba(15,15,18,.72); backdrop-filter: blur(6px); }
+    #pullModal .pm-card {
+      background: linear-gradient(180deg, #26262c 0%, #222228 100%);
+      border: 1px solid #3a3a44;
+      border-radius: 12px;
+      width: min(620px, 94vw);
+      max-height: 88vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0,0,0,.65);
+      animation: pmSlide .22s cubic-bezier(.2,.9,.3,1);
+    }
+    @keyframes pmSlide {
+      from { transform: translateY(12px); opacity: 0 }
+      to   { transform: translateY(0); opacity: 1 }
+    }
+    .pm-header {
+      padding: 18px 22px 14px;
+      border-bottom: 1px solid #2e2e36;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .pm-title { font-size: 15px; font-weight: 600; color: #f2f2f6; }
+    .pm-body { padding: 18px 22px; overflow-y: auto; flex: 1; }
+    .pm-body::-webkit-scrollbar { width: 8px }
+    .pm-body::-webkit-scrollbar-thumb { background: #3a3a44; border-radius: 4px }
+    .pm-label {
+      font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+      color: #6a6a72; margin-bottom: 8px; font-weight: 600;
+    }
+    .pm-status-box {
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 18px;
+      font-size: 12px; line-height: 1.6;
+      background: #1e1e24; border: 1px solid #2e2e36;
+    }
+    .pm-status-box.ok { border-color: rgba(126,198,153,.3); background: rgba(126,198,153,.06); }
+    .pm-status-box.warn { border-color: rgba(255,157,60,.3); background: rgba(255,157,60,.06); }
+    .pm-status-box.err { border-color: rgba(224,108,117,.3); background: rgba(224,108,117,.06); }
+    .pm-status-box code {
+      background: #14141a; padding: 1px 5px; border-radius: 3px;
+      color: #ff9d3c; font-size: 11px;
+    }
+    .pm-files {
+      background: #1a1a1f; border: 1px solid #2e2e36; border-radius: 8px;
+      margin-bottom: 16px; max-height: 180px; overflow-y: auto;
+    }
+    .pm-files::-webkit-scrollbar { width: 8px }
+    .pm-files::-webkit-scrollbar-thumb { background: #3a3a44; border-radius: 4px }
+    .pm-file {
+      display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+      font-size: 12px; font-family: var(--mono); color: #c8c8d0;
+      border-bottom: 1px solid #232329;
+    }
+    .pm-file:last-child { border-bottom: none }
+    .pm-file .badge {
+      width: 18px; height: 18px; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 10px; flex-shrink: 0;
+    }
+    .pm-file .badge.A { background: rgba(126,198,153,.16); color: #7ec699 }
+    .pm-file .badge.M { background: rgba(255,157,60,.16); color: #ff9d3c }
+    .pm-file .badge.D { background: rgba(224,108,117,.16); color: #e06c75 }
+    .pm-file .badge.C { background: rgba(224,108,117,.24); color: #e06c75 }
+    .pm-file .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .pm-file .tag {
+      font-size: 9.5px; padding: 1px 5px; border-radius: 3px;
+      background: #3a2026; color: #e06c75; border: 1px solid #5a2a30;
+    }
+    .pm-empty {
+      padding: 20px; text-align: center; color: #6a6a72; font-size: 12px;
+    }
+    .pm-footer {
+      padding: 14px 22px; border-top: 1px solid #2e2e36;
+      background: #1e1e23; display: flex; justify-content: space-between;
+      align-items: center; gap: 12px;
+    }
+    .pm-status { font-size: 11px; color: #8a8a92; flex: 1 }
+    .pm-status.ok { color: #7ec699 }
+    .pm-status.err { color: #e06c75 }
+    .pm-actions { display: flex; gap: 8px; flex-shrink: 0 }
+    .pm-btn {
+      padding: 8px 16px; border-radius: 8px; font: inherit; font-size: 12px;
+      font-weight: 500; cursor: pointer; border: 1px solid #34343c;
+      background: #26262c; color: #c8c8d0; transition: all .12s;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .pm-btn:hover:not(:disabled) { background: #2e2e36; color: #f0f0f4 }
+    .pm-btn.primary {
+      background: linear-gradient(180deg, #ffa84d, #ff9d3c);
+      border-color: #ff9d3c; color: #1c1c1f; font-weight: 600;
+      box-shadow: 0 2px 8px rgba(255,157,60,.25);
+    }
+    .pm-btn.primary:hover:not(:disabled) {
+      background: linear-gradient(180deg, #ffb257, #ffa347);
+      box-shadow: 0 4px 12px rgba(255,157,60,.35);
+    }
+    .pm-btn.danger {
+      background: #2a1e22; border-color: #5a2a30; color: #e06c75;
+    }
+    .pm-btn.danger:hover:not(:disabled) { background: #341e24; color: #f28a92 }
+    .pm-btn:disabled { opacity: .4; cursor: not-allowed }
+    .pm-spin {
+      width: 12px; height: 12px;
+      border: 2px solid rgba(0,0,0,.15); border-top-color: #1c1c1f;
+      border-radius: 50%; animation: pmSpin .7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes pmSpin { to { transform: rotate(360deg) } }
+    .pm-choices { display: grid; gap: 8px; margin-top: 14px }
+    .pm-choice {
+      display: flex; align-items: center; gap: 12px; padding: 14px;
+      background: #1e1e24; border: 1px solid #2e2e36; border-radius: 8px;
+      cursor: pointer; transition: all .15s;
+    }
+    .pm-choice:hover { background: #24242b; border-color: #3a3a44 }
+    .pm-choice.selected {
+      background: rgba(255,157,60,.08);
+      border-color: #ff9d3c;
+      box-shadow: 0 0 0 3px rgba(255,157,60,.08);
+    }
+    .pm-choice .icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; flex-shrink: 0;
+    }
+    .pm-choice .icon.stash { background: rgba(106,176,243,.14); color: #6ab0f3 }
+    .pm-choice .icon.discard { background: rgba(224,108,117,.14); color: #e06c75 }
+    .pm-choice .icon.cancel { background: rgba(138,138,146,.14); color: #8a8a92 }
+    .pm-choice .text { flex: 1 }
+    .pm-choice .text .t { font-size: 12.5px; font-weight: 600; color: #e6e6ec; margin-bottom: 2px }
+    .pm-choice .text .d { font-size: 11px; color: #8a8a92; line-height: 1.5 }
+  `;
+  document.head.appendChild(style);
+
+  // ---------- 模态框 ----------
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'pullModal';
+  modal.innerHTML = `
+    <div class="pm-card">
+      <div class="pm-header">
+        <div class="pm-title">拉取远程更新</div>
+      </div>
+      <div class="pm-body" id="pmBody"></div>
+      <div class="pm-footer">
+        <div class="pm-status" id="pmStatus"></div>
+        <div class="pm-actions" id="pmActions"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const $p = (id) => document.getElementById(id);
+  const bodyEl = $p('pmBody');
+  const statusEl = $p('pmStatus');
+  const actionsEl = $p('pmActions');
+
+  // ---------- 状态对象 ----------
+  const pullState = {
+    status: null,     // { kind: 'behind'|'ahead'|'diverged'|'up-to-date', remoteSha, headSha, aheadCount, behindCount }
+    localChanges: null,
+    conflicts: [],
+    strategy: null,   // 'stash' | 'discard' | null
+    remoteName: 'origin',
+    remoteBranch: 'main',
+  };
+
+  // ---------- 复用已有的辅助函数（从 commit 模块） ----------
+  const IGNORE_DIRS = new Set([
+    'node_modules','dist','build','.next','.nuxt','.cache','.parcel-cache',
+    '.venv','venv','env','__pycache__','.pytest_cache','.mypy_cache',
+    'target','.gradle','.idea','.vscode',
+    'coverage','.nyc_output','out','bin','obj'
+  ]);
+  const IGNORE_FILES = new Set(['.DS_Store','Thumbs.db','desktop.ini']);
+
+  async function scanWorktree(root) {
+    const files = new Map();
+    async function walk(dir, prefix) {
+      for await (const [name, h] of dir.entries()) {
+        if (name === '.git') continue;
+        if (prefix === '' && IGNORE_DIRS.has(name)) continue;
+        if (IGNORE_FILES.has(name)) continue;
+        const path = prefix ? prefix + '/' + name : name;
+        if (h.kind === 'directory') {
+          if (IGNORE_DIRS.has(name)) continue;
+          await walk(h, path);
+        } else if (h.kind === 'file') {
+          try {
+            const f = await h.getFile();
+            if (f.size > 50 * 1024 * 1024) continue;
+            files.set(path, new Uint8Array(await f.arrayBuffer()));
+          } catch {}
+        }
+      }
+    }
+    await walk(root, '');
+    return files;
+  }
+
+  async function collectTreeFiles(repo, treeSha, prefix, out) {
+    const entries = await repo.treeEntries(treeSha);
+    for (const e of entries) {
+      const path = prefix ? prefix + '/' + e.name : e.name;
+      if (e.type === 'tree') await collectTreeFiles(repo, e.sha, path, out);
+      else if (e.type === 'blob') out.set(path, { sha: e.sha, mode: e.mode });
+    }
+    return out;
+  }
+
+  async function blobSha(bytes) {
+    const header = ENC.encode('blob ' + bytes.length + '\0');
+    const buf = new Uint8Array(header.length + bytes.length);
+    buf.set(header, 0);
+    buf.set(bytes, header.length);
+    return hex(await sha1Bytes(buf));
+  }
+
+  async function detectLocalChanges(repo) {
+    const headSha = repo.headSha;
+    if (!headSha) return { added: [], modified: [], deleted: [] };
+    const commit = await repo.parseCommit(headSha);
+    const treeFiles = await collectTreeFiles(repo, commit.tree, '', new Map());
+    const workFiles = await scanWorktree(repo.work);
+
+    const ch = { added: [], modified: [], deleted: [] };
+    for (const [path, bytes] of workFiles) {
+      const existing = treeFiles.get(path);
+      if (!existing) ch.added.push({ path, bytes });
+      else {
+        const sha = await blobSha(bytes);
+        if (sha !== existing.sha) ch.modified.push({ path, bytes, oldSha: existing.sha });
+      }
+    }
+    for (const [path, info] of treeFiles) {
+      if (!workFiles.has(path)) ch.deleted.push({ path, sha: info.sha, mode: info.mode });
+    }
+    return ch;
+  }
+
+  // ---------- 远程 fetch ----------
+  function getRemoteUrl(repo) {
+    // 从 repo.git 里读 config，找 [remote "origin"] 的 url
+    return repo._remoteUrl || null;
+  }
+
+  async function fetchRemotePack(repo) {
+    // 从 config 里读远程 URL
+    let remoteUrl = repo._remoteUrl;
+    if (!remoteUrl) {
+      try {
+        const txt = TD.decode(await repo._file('config'));
+        const m = /\[remote "origin"\][^[]*?url\s*=\s*(\S+)/.exec(txt);
+        if (m) remoteUrl = m[1];
+      } catch {}
+    }
+    if (!remoteUrl) throw new Error('未找到远程 origin URL');
+
+    const proxyBase = '/api/proxy';
+    const proxied = (u) => proxyBase + '/?url=' + encodeURIComponent(u);
+
+    // 1. 请求 info/refs
+    const infoRes = await fetch(proxied(remoteUrl.replace(/\/+$/, '') + '/info/refs?service=git-upload-pack'), {
+      headers: { 'Accept': 'application/x-git-upload-pack-advertisement' }
+    });
+    if (!infoRes.ok) throw new Error('获取远程引用失败: HTTP ' + infoRes.status);
+    const infoData = new Uint8Array(await infoRes.arrayBuffer());
+
+    const refs = {};
+    let headSha = null;
+    let p = 0;
+    while (p + 4 <= infoData.length) {
+      const len = parseInt(TD.decode(infoData.subarray(p, p + 4)), 16);
+      p += 4;
+      if (len === 0) continue;
+      if (len < 4) break;
+      const payload = infoData.subarray(p, p + len - 4);
+      p += len - 4;
+      const text = TD.decode(payload);
+      if (text.startsWith('# service=') || text.startsWith('version ')) continue;
+      const clean = text.replace(/\0[\s\S]*$/, '').trim();
+      const m = /^([0-9a-f]{40})\s+(.+)$/.exec(clean);
+      if (!m) continue;
+      refs[m[2]] = m[1];
+      if (m[2] === 'HEAD') headSha = m[1];
+    }
+
+    // 2. 构造 want 请求
+    function buildPkt(str) {
+      const b = ENC.encode(str);
+      return { header: ENC.encode((b.length + 4).toString(16).padStart(4, '0')), body: b };
+    }
+
+    const wantShas = [...new Set(Object.values(refs))].filter(s => /^[0-9a-f]{40}$/.test(s));
+    if (!wantShas.length) throw new Error('远程没有任何引用');
+
+    const parts = [];
+    const first = buildPkt('want ' + wantShas[0] + ' ofs-delta no-progress\n');
+    parts.push(first.header, first.body);
+    for (let i = 1; i < wantShas.length; i++) {
+      const k = buildPkt('want ' + wantShas[i] + '\n');
+      parts.push(k.header, k.body);
+    }
+    parts.push(ENC.encode('0000'));
+    const done = buildPkt('done\n');
+    parts.push(done.header, done.body);
+
+    let total = 0;
+    for (const x of parts) total += x.length;
+    const reqBody = new Uint8Array(total);
+    let off = 0;
+    for (const x of parts) { reqBody.set(x, off); off += x.length; }
+
+    // 3. 请求 pack
+    const packRes = await fetch(proxied(remoteUrl.replace(/\/+$/, '') + '/git-upload-pack'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-git-upload-pack-request',
+        'Accept': 'application/x-git-upload-pack-result'
+      },
+      body: reqBody
+    });
+    if (!packRes.ok) throw new Error('下载 pack 失败: HTTP ' + packRes.status);
+    const respData = new Uint8Array(await packRes.arrayBuffer());
+
+    let packStart = -1;
+    for (let i = 0; i < respData.length - 4; i++) {
+      if (respData[i] === 0x50 && respData[i+1] === 0x41 &&
+          respData[i+2] === 0x43 && respData[i+3] === 0x4b) { packStart = i; break; }
+    }
+    if (packStart < 0) throw new Error('响应中没有 packfile');
+
+    // 4. 解析 pack
+    const { objects, packEnd } = parsePackAt(respData, packStart);
+    const packData = respData.subarray(packStart, packEnd);
+
+    // 5. 计算 sha + crc32
+    for (const o of objects) {
+      o.packOffset = o.start - packStart;
+      o.crc32 = crc32(packData.subarray(o.start - packStart, o.end - packStart));
+      o.sha = await computeSha(o.type, o.data);
+    }
+
+    return { refs, headSha, objects, packData };
+  }
+
+  async function saveFetchedObjects(repo, objects, packData) {
+    // 写 pack + idx 到 .git/objects/pack/
+    const objectsDir = await repo.git.getDirectoryHandle('objects', {create: true});
+    const packDir = await objectsDir.getDirectoryHandle('pack', {create: true});
+
+    const packBody = packData.subarray(0, packData.length - 20);
+    const packSha = await sha1Bytes(packBody);
+    const packName = 'pack-' + hex(packSha);
+
+    // 已存在则跳过
+    let exists = true;
+    try { await packDir.getFileHandle(packName + '.pack'); } catch { exists = false; }
+    if (exists) return;
+
+    const fh = await packDir.getFileHandle(packName + '.pack', {create: true});
+    const w = await fh.createWritable();
+    await w.write(packData);
+    await w.close();
+
+    const idxBytes = await generateIdx(objects, packBody);
+    const fh2 = await packDir.getFileHandle(packName + '.idx', {create: true});
+    const w2 = await fh2.createWritable();
+    await w2.write(idxBytes);
+    await w2.close();
+  }
+
+  async function updateRemoteRefs(repo, refs) {
+    // 更新 refs/remotes/origin/*
+    const refsDir = await repo.git.getDirectoryHandle('refs', {create: true});
+    const remotesDir = await refsDir.getDirectoryHandle('remotes', {create: true});
+    const originDir = await remotesDir.getDirectoryHandle('origin', {create: true});
+
+    for (const [refName, sha] of Object.entries(refs)) {
+      if (refName === 'HEAD') continue;
+      if (refName.startsWith('refs/heads/')) {
+        const name = refName.slice(11);
+        const parts = name.split('/');
+        let dir = originDir;
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = await dir.getDirectoryHandle(parts[i], {create: true});
+        }
+        const fh = await dir.getFileHandle(parts[parts.length - 1], {create: true});
+        const w = await fh.createWritable();
+        await w.write(ENC.encode(sha + '\n'));
+        await w.close();
+      }
+    }
+  }
+
+  // ---------- 祖先检测 ----------
+  async function ancestors(repo, sha, limit = 1000) {
+    const seen = new Set();
+    const stack = [sha];
+    while (stack.length && seen.size < limit) {
+      const s = stack.pop();
+      if (seen.has(s)) continue;
+      seen.add(s);
+      try {
+        const c = await repo.parseCommit(s);
+        for (const p of c.parents) stack.push(p);
+      } catch { break; }
+    }
+    return seen;
+  }
+
+  async function countAheadBehind(repo, localSha, remoteSha) {
+    // 简化计数（只数到 200 层）
+    let ahead = 0, behind = 0;
+    const localAnc = await ancestors(repo, localSha, 500);
+    const remoteAnc = await ancestors(repo, remoteSha, 500);
+
+    // 共同的 ancestor 是 localAnc 和 remoteAnc 的交集
+    // 简单计数：localAnc 中不在 remoteAnc 的数量 = ahead
+    //          remoteAnc 中不在 localAnc 的数量 = behind
+    for (const s of localAnc) if (!remoteAnc.has(s)) ahead++;
+    for (const s of remoteAnc) if (!localAnc.has(s)) behind++;
+    return { ahead, behind };
+  }
+
+  async function detectPullStatus(repo) {
+    // 读取本地 origin/main 的 sha
+    const headSha = repo.headSha;
+    if (!headSha) throw new Error('本地没有 HEAD');
+
+    // 读 refs/remotes/origin/<branch>
+    const branch = (repo.headName || 'main').replace(/^remotes\/origin\//, '');
+    let remoteSha = null;
+    try {
+      const refsDir = await repo.git.getDirectoryHandle('refs');
+      const remotesDir = await refsDir.getDirectoryHandle('remotes');
+      const originDir = await remotesDir.getDirectoryHandle('origin');
+      const fh = await originDir.getFileHandle(branch);
+      const txt = TD.decode(new Uint8Array(await (await fh.getFile()).arrayBuffer())).trim();
+      remoteSha = txt.split('\n')[0].trim();
+    } catch {}
+
+    if (!remoteSha) throw new Error('没有 origin/' + branch + ' 引用，请先 fetch');
+
+    if (headSha === remoteSha) {
+      return { kind: 'up-to-date', headSha, remoteSha, ahead: 0, behind: 0 };
+    }
+
+    const localAnc = await ancestors(repo, headSha, 500);
+    const remoteAnc = await ancestors(repo, remoteSha, 500);
+
+    if (localAnc.has(remoteSha)) {
+      // 远程是本地祖先 → 本地领先
+      const { ahead, behind } = await countAheadBehind(repo, headSha, remoteSha);
+      return { kind: 'ahead', headSha, remoteSha, ahead, behind };
+    }
+    if (remoteAnc.has(headSha)) {
+      // 本地是远程祖先 → 本地落后
+      const { ahead, behind } = await countAheadBehind(repo, headSha, remoteSha);
+      return { kind: 'behind', headSha, remoteSha, ahead, behind };
+    }
+    // 分叉
+    const { ahead, behind } = await countAheadBehind(repo, headSha, remoteSha);
+    return { kind: 'diverged', headSha, remoteSha, ahead, behind };
+  }
+
+  // ---------- FF 涉及的文件 ----------
+  async function getFFFiles(repo, oldSha, newSha) {
+    if (oldSha === newSha) return [];
+    const oldCommit = await repo.parseCommit(oldSha);
+    const newCommit = await repo.parseCommit(newSha);
+
+    // 遍历 new 相对 old 的所有 tree 差异
+    // 由于 fast-forward，new 的历史包含 old，但我们需要的是两点之间的差异
+    // 简化：只比较 oldCommit.tree 和 newCommit.tree
+    // （不处理中间 commit 中的中间态）
+    // 实际上 FF 的最终效果 = 从 old 检出到 new 检出，中间文件变化
+    // 我们需要 diff(oldCommit.tree, newCommit.tree)，这会给出最终差异
+
+    // 但要注意：diffTrees 在 index.html 里已经定义
+    const entries = await diffTrees(repo, oldCommit.tree, newCommit.tree, '', []);
+    return entries;
+  }
+
+  // ---------- 检测本地更改和冲突 ----------
+  async function checkConflicts(repo) {
+    const localChanges = await detectLocalChanges(repo);
+    const total = localChanges.added.length + localChanges.modified.length + localChanges.deleted.length;
+
+    if (total === 0) {
+      return { localChanges, conflicts: [], totalLocal: 0 };
+    }
+
+    const status = pullState.status;
+    const ffEntries = await getFFFiles(repo, status.headSha, status.remoteSha);
+    const ffPaths = new Set(ffEntries.map(e => e.path));
+
+    const localPaths = new Set([
+      ...localChanges.added.map(f => f.path),
+      ...localChanges.modified.map(f => f.path),
+      ...localChanges.deleted.map(f => f.path),
+    ]);
+
+    const conflicts = [...localPaths].filter(p => ffPaths.has(p));
+    return { localChanges, conflicts, totalLocal: total, ffEntries };
+  }
+
+  // ---------- 拉取执行 ----------
+  async function fastForward(repo, targetSha, onProgress) {
+    // 1. 更新 refs/heads/<branch>
+    const branch = (repo.headRef || 'heads/main').replace(/^heads\//, '');
+    const refsDir = await repo.git.getDirectoryHandle('refs', {create: true});
+    const headsDir = await refsDir.getDirectoryHandle('heads', {create: true});
+    const fh = await headsDir.getFileHandle(branch, {create: true});
+    const w = await fh.createWritable();
+    await w.write(ENC.encode(targetSha + '\n'));
+    await w.close();
+
+    // 2. 更新内存状态
+    repo.refs.branch[branch] = targetSha;
+    repo.objCache.clear();
+    repo.treeCache.clear();
+    repo.commitCache.clear();
+    repo.packs = [];
+  }
+
+  async function checkoutFF(repo, oldSha, newSha, skipPaths, onProgress) {
+    // 从 newSha 的 tree 检出，跳过 skipPaths 里的路径
+    const newCommit = await repo.parseCommit(newSha);
+    const newTreeFiles = await collectTreeFiles(repo, newCommit.tree, '', new Map());
+    const oldCommit = await repo.parseCommit(oldSha);
+    const oldTreeFiles = await collectTreeFiles(repo, oldCommit.tree, '', new Map());
+
+    // 找出所有需要删除的文件（旧有新没有）
+    const toDelete = [];
+    for (const [path, info] of oldTreeFiles) {
+      if (!newTreeFiles.has(path) && !skipPaths.has(path)) {
+        toDelete.push(path);
+      }
+    }
+
+    // 删除文件
+    for (const path of toDelete) {
+      try {
+        const parts = path.split('/');
+        let dir = repo.work;
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = await dir.getDirectoryHandle(parts[i]);
+        }
+        await dir.removeEntry(parts[parts.length - 1]);
+      } catch {}
+    }
+
+    // 写入/覆盖文件（只处理变动的，跳过 skipPaths）
+    let count = 0;
+    for (const [path, info] of newTreeFiles) {
+      if (skipPaths.has(path)) continue;
+      const oldInfo = oldTreeFiles.get(path);
+      if (oldInfo && oldInfo.sha === info.sha) continue;
+
+      try {
+        const obj = await repo.readObject(info.sha);
+        const parts = path.split('/');
+        let dir = repo.work;
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = await dir.getDirectoryHandle(parts[i], {create: true});
+        }
+        const fh = await dir.getFileHandle(parts[parts.length - 1], {create: true});
+        const w = await fh.createWritable();
+        await w.write(obj.data);
+        await w.close();
+        count++;
+        if (count % 20 === 0) onProgress('检出文件 ' + count + '…');
+      } catch (e) {
+        console.warn('[GitDeck-pull] 检出失败:', path, e);
+      }
+    }
+    return count;
+  }
+
+  // 把指定路径的工作区文件还原到 HEAD 状态
+  async function discardPaths(repo, paths) {
+    const headCommit = await repo.parseCommit(repo.headSha);
+    const headFiles = await collectTreeFiles(repo, headCommit.tree, '', new Map());
+
+    for (const path of paths) {
+      const info = headFiles.get(path);
+      if (info) {
+        try {
+          const obj = await repo.readObject(info.sha);
+          const parts = path.split('/');
+          let dir = repo.work;
+          for (let i = 0; i < parts.length - 1; i++) {
+            dir = await dir.getDirectoryHandle(parts[i], {create: true});
+          }
+          const fh = await dir.getFileHandle(parts[parts.length - 1], {create: true});
+          const w = await fh.createWritable();
+          await w.write(obj.data);
+          await w.close();
+        } catch (e) {
+          console.warn('[GitDeck-pull] 还原失败:', path, e);
+        }
+      } else {
+        // HEAD 里没有这个文件，说明是新增的未提交文件 → 删除
+        try {
+          const parts = path.split('/');
+          let dir = repo.work;
+          for (let i = 0; i < parts.length - 1; i++) {
+            dir = await dir.getDirectoryHandle(parts[i]);
+          }
+          await dir.removeEntry(parts[parts.length - 1]);
+        } catch {}
+      }
+    }
+  }
+
+  // 把指定路径的工作区文件保存到内存
+  async function stashPaths(repo, paths) {
+    const stash = new Map();
+    for (const path of paths) {
+      try {
+        const parts = path.split('/');
+        let dir = repo.work;
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = await dir.getDirectoryHandle(parts[i]);
+        }
+        const fh = await dir.getFileHandle(parts[parts.length - 1]);
+        const f = await fh.getFile();
+        stash.set(path, new Uint8Array(await f.arrayBuffer()));
+      } catch {
+        // 文件不存在（被删除）→ 记为 null 表示"删除"
+        stash.set(path, null);
+      }
+    }
+    return stash;
+  }
+
+  async function restoreStash(repo, stash) {
+    for (const [path, bytes] of stash) {
+      try {
+        const parts = path.split('/');
+        let dir = repo.work;
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = await dir.getDirectoryHandle(parts[i], {create: true});
+        }
+        if (bytes === null) {
+          // 原来被删除的文件
+          try { await dir.removeEntry(parts[parts.length - 1]); } catch {}
+        } else {
+          const fh = await dir.getFileHandle(parts[parts.length - 1], {create: true});
+          const w = await fh.createWritable();
+          await w.write(bytes);
+          await w.close();
+        }
+      } catch (e) {
+        console.warn('[GitDeck-pull] 恢复失败:', path, e);
+      }
+    }
+  }
+
+  // ---------- 渲染 ----------
+  function setStatus(msg, type) {
+    statusEl.className = 'pm-status' + (type ? ' ' + type : '');
+    statusEl.textContent = msg || '';
+  }
+
+  function renderChecking() {
+    bodyEl.innerHTML = '<div class="pm-empty">正在检查远程状态…</div>';
+    actionsEl.innerHTML = '';
+    setStatus('');
+  }
+
+  function renderUpToDate() {
+    bodyEl.innerHTML = `
+      <div class="pm-status-box ok">
+        ✅ 本地和远程一致，无需拉取
+      </div>`;
+    actionsEl.innerHTML = '<button class="pm-btn" id="pmClose">关闭</button>';
+  }
+
+  function renderAhead() {
+    const s = pullState.status;
+    bodyEl.innerHTML = `
+      <div class="pm-status-box warn">
+        ⚠️ 本地领先远程 <b>${s.ahead}</b> 个提交
+        <br><br>
+        拉取不会带来任何新内容，你可能需要 <b>push</b>。
+      </div>`;
+    actionsEl.innerHTML = '<button class="pm-btn" id="pmClose">关闭</button>';
+  }
+
+  function renderDiverged() {
+    const s = pullState.status;
+    bodyEl.innerHTML = `
+      <div class="pm-status-box err">
+        ⚠️ 本地和远程已分叉
+        <br><br>
+        本地领先 <b>${s.ahead}</b>，落后 <b>${s.behind}</b>。
+        <br><br>
+        简单的快进拉取无法处理这种情况，需要用命令行执行
+        <code>git pull --rebase</code> 或 <code>git merge</code>。
+      </div>`;
+    actionsEl.innerHTML = '<button class="pm-btn" id="pmClose">关闭</button>';
+  }
+
+  function renderBehindWithConflicts() {
+    const s = pullState.status;
+    const ch = pullState.localChanges;
+    const conflicts = pullState.conflicts;
+
+    const rows = [];
+    function addRow(kind, path, isConflict) {
+      rows.push(`
+        <div class="pm-file">
+          <span class="badge ${kind}">${kind}</span>
+          <span class="path">${escapeHtml(path)}</span>
+          ${isConflict ? '<span class="tag">冲突</span>' : ''}
+        </div>`);
+    }
+    for (const f of ch.modified) addRow('M', f.path, conflicts.includes(f.path));
+    for (const f of ch.added) addRow('A', f.path, conflicts.includes(f.path));
+    for (const f of ch.deleted) addRow('D', f.path, conflicts.includes(f.path));
+
+    bodyEl.innerHTML = `
+      <div class="pm-status-box warn">
+        ⚠️ 本地落后远程 <b>${s.behind}</b> 个提交
+        <br>
+        有 <b>${conflicts.length}</b> 个文件会与本地未提交更改冲突
+      </div>
+
+      <div class="pm-label">本地未提交的更改（${ch.added.length + ch.modified.length + ch.deleted.length}）</div>
+      <div class="pm-files">${rows.join('')}</div>
+
+      <div class="pm-label">选择处理方式</div>
+      <div class="pm-choices">
+        <div class="pm-choice" data-strategy="stash">
+          <div class="icon stash">📦</div>
+          <div class="text">
+            <div class="t">暂存我的更改，然后拉取</div>
+            <div class="d">把冲突文件保存在内存里，拉取完成后恢复。冲突内容可能被远程覆盖。</div>
+          </div>
+        </div>
+        <div class="pm-choice" data-strategy="discard">
+          <div class="icon discard">🗑</div>
+          <div class="text">
+            <div class="t">放弃我的更改，然后拉取</div>
+            <div class="d">把冲突文件还原到 HEAD 状态。未冲突的文件不受影响。</div>
+          </div>
+        </div>
+        <div class="pm-choice" data-strategy="cancel">
+          <div class="icon cancel">✕</div>
+          <div class="text">
+            <div class="t">取消</div>
+            <div class="d">不做任何事。你可以先手动提交本地更改。</div>
+          </div>
+        </div>
+      </div>`;
+
+    actionsEl.innerHTML = `
+      <button class="pm-btn" id="pmClose">取消</button>
+      <button class="pm-btn primary" id="pmDo" disabled>继续</button>`;
+
+    // 选项点击
+    bodyEl.querySelectorAll('.pm-choice').forEach(el => {
+      el.addEventListener('click', () => {
+        bodyEl.querySelectorAll('.pm-choice').forEach(x => x.classList.remove('selected'));
+        el.classList.add('selected');
+        pullState.strategy = el.dataset.strategy;
+        const doBtn = document.getElementById('pmDo');
+        if (doBtn) doBtn.disabled = false;
+        doBtn.textContent = pullState.strategy === 'cancel' ? '关闭' : '继续';
+      });
+    });
+  }
+
+  function renderBehindNoConflict() {
+    const s = pullState.status;
+    const ch = pullState.localChanges;
+    const total = ch.added.length + ch.modified.length + ch.deleted.length;
+
+    bodyEl.innerHTML = `
+      <div class="pm-status-box ok">
+        ✅ 本地落后远程 <b>${s.behind}</b> 个提交
+        <br>
+        本地有 ${total} 个未提交的更改，但没有文件冲突。
+        <br>
+        可以直接拉取，本地更改会被保留。
+      </div>`;
+
+    actionsEl.innerHTML = `
+      <button class="pm-btn" id="pmClose">取消</button>
+      <button class="pm-btn primary" id="pmDo">拉取</button>`;
+
+    pullState.strategy = 'normal';
+    const doBtn = document.getElementById('pmDo');
+    if (doBtn) doBtn.disabled = false;
+  }
+
+  // ---------- 主流程 ----------
+  async function openPullModal() {
+    if (!state.repo || state.repo.source !== 'local' || !state.repo.work) {
+      showToast('仅本地仓库支持拉取');
+      return;
+    }
+    modal.classList.add('show');
+    renderChecking();
+
+    try {
+      // 1. fetch 远程
+      setStatus('拉取远程引用…');
+      const remoteUrl = await (async () => {
+        try {
+          const txt = TD.decode(await state.repo._file('config'));
+          const m = /\[remote "origin"\][^[]*?url\s*=\s*(\S+)/.exec(txt);
+          if (m) return m[1];
+        } catch {}
+        return null;
+      })();
+
+      if (!remoteUrl) throw new Error('仓库没有配置 origin 远程');
+      state.repo._remoteUrl = remoteUrl;
+
+      const fetched = await fetchRemotePack(state.repo);
+      setStatus('保存 packfile…');
+      await saveFetchedObjects(state.repo, fetched.objects, fetched.packData);
+      await updateRemoteRefs(state.repo, fetched.refs);
+
+      // 2. 检测状态
+      setStatus('检测本地状态…');
+      const st = await detectPullStatus(state.repo);
+      pullState.status = st;
+
+      if (st.kind === 'up-to-date') { renderUpToDate(); setStatus('已是最新'); return; }
+      if (st.kind === 'ahead') { renderAhead(); setStatus('本地领先'); return; }
+      if (st.kind === 'diverged') { renderDiverged(); setStatus('已分叉'); return; }
+
+      // st.kind === 'behind'
+      setStatus('检查本地未提交更改…');
+      const check = await checkConflicts(state.repo);
+      pullState.localChanges = check.localChanges;
+      pullState.conflicts = check.conflicts;
+
+      if (check.totalLocal === 0) {
+        // 干净工作区 → 直接 FF
+        pullState.strategy = 'normal';
+        bodyEl.innerHTML = `
+          <div class="pm-status-box ok">
+            ✅ 本地落后远程 <b>${st.behind}</b> 个提交
+            <br>
+            工作区干净，可以直接快进拉取。
+          </div>`;
+        actionsEl.innerHTML = `
+          <button class="pm-btn" id="pmClose">取消</button>
+          <button class="pm-btn primary" id="pmDo">拉取</button>`;
+        setStatus('可以拉取');
+      } else if (check.conflicts.length === 0) {
+        renderBehindNoConflict();
+        setStatus('可以拉取（保留本地更改）');
+      } else {
+        renderBehindWithConflicts();
+        setStatus('需要选择处理方式');
+      }
+    } catch (e) {
+      console.error(e);
+      bodyEl.innerHTML = `<div class="pm-status-box err">
+        ❌ ${escapeHtml(e.message)}
+      </div>`;
+      actionsEl.innerHTML = '<button class="pm-btn" id="pmClose">关闭</button>';
+      setStatus('失败', 'err');
+    }
+
+    // 通用关闭按钮
+    const closeBtn = document.getElementById('pmClose');
+    if (closeBtn) closeBtn.addEventListener('click', closePullModal);
+  }
+
+  function closePullModal() {
+    modal.classList.remove('show');
+    pullState.strategy = null;
+  }
+
+  async function executePull() {
+    const strategy = pullState.strategy;
+    if (strategy === 'cancel') { closePullModal(); return; }
+
+    const doBtn = document.getElementById('pmDo');
+    if (doBtn) { doBtn.disabled = true; doBtn.innerHTML = '<span class="pm-spin"></span> 拉取中'; }
+
+    try {
+      const repo = state.repo;
+      const status = pullState.status;
+      const target = status.remoteSha;
+
+      // 计算要跳过的路径
+      let skipPaths = new Set();
+      let stashContent = null;
+
+      if (pullState.conflicts.length > 0) {
+        if (strategy === 'discard') {
+          setStatus('放弃本地更改…');
+          await discardPaths(repo, pullState.conflicts);
+        } else if (strategy === 'stash') {
+          setStatus('暂存本地更改…');
+          stashContent = await stashPaths(repo, pullState.conflicts);
+          skipPaths = new Set(pullState.conflicts);
+        }
+      }
+
+      // 执行 FF
+      setStatus('更新本地引用…');
+      await fastForward(repo, target, (m) => setStatus(m));
+
+      setStatus('检出工作区…');
+      await checkoutFF(repo, status.headSha, target, skipPaths, (m) => setStatus(m));
+
+      // 恢复 stash
+      if (stashContent) {
+        setStatus('恢复暂存的更改…');
+        await restoreStash(repo, stashContent);
+      }
+
+      setStatus('拉取完成', 'ok');
+      if (window.reload) {
+        setTimeout(async () => {
+          closePullModal();
+          await reload();
+        }, 700);
+      } else {
+        setTimeout(closePullModal, 700);
+      }
+    } catch (e) {
+      console.error(e);
+      setStatus('拉取失败：' + e.message, 'err');
+      if (doBtn) { doBtn.disabled = false; doBtn.textContent = '重试'; }
+    }
+  }
+
+  // ---------- 事件 ----------
+  pullBtn.addEventListener('click', openPullModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closePullModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('show')) closePullModal();
+  });
+  // 动态绑定的 pmDo 按钮需要在 document 上委托
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'pmDo') {
+      executePull();
+    }
+  });
+
+  // ---------- 顶栏角标：显示落后数量 ----------
+  async function updateBadge() {
+    if (!state.repo || state.repo.source !== 'local') {
+      pullBadge.style.display = 'none';
+      return;
+    }
+    try {
+      const st = await detectPullStatus(state.repo);
+      if (st.kind === 'behind' && st.behind > 0) {
+        pullBadge.textContent = '↓' + st.behind;
+        pullBadge.style.display = '';
+        pullBadge.style.background = '#ff9d3c';
+      } else if (st.kind === 'diverged') {
+        pullBadge.textContent = '⇅';
+        pullBadge.style.display = '';
+        pullBadge.style.background = '#e06c75';
+      } else {
+        pullBadge.style.display = 'none';
+      }
+    } catch {
+      pullBadge.style.display = 'none';
+    }
+  }
+
+  // 定期刷新角标（每 10 秒）
+  setInterval(() => {
+    if (state.repo && state.repo.source === 'local') updateBadge();
+  }, 10000);
+  setTimeout(updateBadge, 1500);
+
+  console.log('[GitDeck-pull] 拉取功能已启用');
+})();
+
 </script>
 </body>
 </html>
