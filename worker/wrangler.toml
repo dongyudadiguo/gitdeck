@@ -1,0 +1,12 @@
+name = "git-proxy"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+# 可选：绑定自定义域名（需在 Cloudflare Dashboard 先配置）
+# routes = [
+#   { pattern = "git-proxy.example.com", custom_domain = true }
+# ]
+
+# 可选：限制并发 / 超时
+# [limits]
+# cpu_ms = 50

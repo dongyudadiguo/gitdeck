@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GitDeck · 网页版 Git 控制台</title>
+<meta name="description" content="在浏览器中打开、克隆并浏览 Git 仓库。提交图、分支视图、行级差异。">
+<style>
+:root{
+  --bg:#1e1e21;--bg-deep:#1a1a1c;--panel:#232327;--border:#34343a;--border-soft:#2a2a2f;
+  --text:#d6d6da;--text-dim:#8a8a92;--text-faint:#5e5e66;
+  --accent:#ff9d3c;--accent-dim:#8a5a24;--blue:#6ab0f3;--green:#7ec699;--red:#e06c75;
+  --sel:#333a45;--hover:#27272c;--graph-w:44px;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Noto Sans Mono CJK SC",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:12px/1.5 var(--mono);-webkit-font-smoothing:antialiased;overflow:hidden}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#3a3a42;border:3px solid var(--bg);border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:#4a4a54}
+#app{display:grid;grid-template-rows:38px 1fr 24px;height:100vh}
+.topbar{display:flex;align-items:center;gap:14px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--border)}
+.tb-left{display:flex;align-items:center;gap:8px;flex:none;min-width:0}
+.logo{color:var(--accent);font-size:15px;line-height:1;font-weight:700;letter-spacing:-.5px}
+.repo-name{color:#eaeaee;font-weight:600;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.crumb{color:var(--text-faint)}
+.branch-tag{color:var(--blue);background:rgba(106,176,243,.1);border:1px solid rgba(106,176,243,.3);padding:1px 6px;border-radius:3px;font-size:11px;white-space:nowrap}
+.src-tag{font-size:10px;color:var(--text-faint);border:1px solid var(--border);padding:0 5px;border-radius:3px;line-height:15px;white-space:nowrap}
+.tb-center{flex:1;display:flex;justify-content:center;min-width:0}
+.search-input{width:min(420px,100%);background:#17171a;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:4px;font:inherit;outline:none;transition:border-color .12s}
+.search-input::placeholder{color:var(--text-faint)}
+.search-input:focus{border-color:var(--accent-dim);background:#131316}
+.tb-right{display:flex;gap:6px;flex:none}
+.btn{background:#2c2c32;border:1px solid var(--border);color:var(--text-dim);padding:4px 10px;border-radius:4px;font:inherit;cursor:pointer;transition:background .12s,color .12s;white-space:nowrap}
+.btn:hover{background:#37373e;color:var(--text)}
+.btn.accent{background:var(--accent);border-color:var(--accent);color:#1c1c1f;font-weight:700}
+.btn.accent:hover{background:#ffb257;color:#1c1c1f}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.main{display:grid;grid-template-columns:200px minmax(300px,1fr) minmax(360px,1.3fr);min-height:0}
+.sidebar{background:var(--bg-deep);border-right:1px solid var(--border);overflow-y:auto;padding:6px 0 20px}
+.side-title{font-size:10px;letter-spacing:.1em;color:var(--text-faint);padding:10px 12px 4px;text-transform:uppercase;user-select:none}
+.side-item{display:flex;align-items:center;gap:8px;padding:3px 12px;cursor:pointer;color:var(--text-dim);white-space:nowrap;overflow:hidden;border-left:2px solid transparent}
+.side-item:hover{background:#222226;color:var(--text)}
+.side-item.active{background:#2a2a31;color:var(--text);border-left-color:var(--accent)}
+.side-item.active .side-name{color:var(--accent)}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.side-name{flex:1;overflow:hidden;text-overflow:ellipsis}
+.side-badge{font-size:9px;color:var(--accent);border:1px solid var(--accent-dim);border-radius:2px;padding:0 3px;line-height:12px}
+.side-empty{padding:2px 12px 6px;color:var(--text-faint)}
+.commits{overflow:hidden;border-right:1px solid var(--border);background:var(--bg)}
+.commit-scroll{height:100%;overflow:auto;position:relative}
+.commit-inner{position:relative;min-height:100%}
+.graph{position:absolute;left:0;top:0;pointer-events:none;display:block}
+.row{display:flex;align-items:center;gap:8px;height:26px;padding-left:var(--graph-w);padding-right:12px;cursor:pointer;white-space:nowrap;user-select:none;position:relative}
+.row:hover{background:var(--hover)}
+.row.selected{background:var(--sel)}
+.row.selected .subject{color:#fff}
+.row .refs{display:flex;gap:4px;flex:none}
+.ref{font-size:10px;line-height:14px;padding:0 5px;border-radius:3px;border:1px solid transparent;white-space:nowrap}
+.ref.head{background:var(--accent);color:#1c1c1f;font-weight:700}
+.ref.branch{color:var(--blue);background:rgba(106,176,243,.12);border-color:rgba(106,176,243,.35)}
+.ref.tag{color:var(--green);background:rgba(126,198,153,.12);border-color:rgba(126,198,153,.35)}
+.ref.remote{color:var(--text-dim);border-color:var(--border)}
+.row .subject{flex:1;overflow:hidden;text-overflow:ellipsis;color:#dedee3}
+.row .author{flex:none;width:78px;text-align:right;color:var(--text-faint);overflow:hidden;text-overflow:ellipsis}
+.row .date{flex:none;width:86px;text-align:right;color:var(--text-faint)}
+.detail{overflow:hidden;background:var(--bg)}
+.detail-scroll{height:100%;overflow:auto}
+.detail-head{padding:12px 14px 10px;border-bottom:1px solid var(--border);background:#202024}
+.d-subject{font-size:13px;color:#f0f0f3;font-weight:600;line-height:1.45;word-break:break-word}
+.d-meta{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:7px;color:var(--text-faint);font-size:11px}
+.d-sha{color:var(--accent)}
+.d-refs{display:flex;gap:4px;flex-wrap:wrap}
+.d-body{margin-top:8px;color:var(--text-dim);white-space:pre-wrap;line-height:1.6;max-height:180px;overflow:auto}
+.file-block{border-bottom:1px solid var(--border-soft)}
+.file-head{display:flex;align-items:center;gap:8px;padding:5px 14px;background:#26262b;border-bottom:1px solid var(--border-soft);position:sticky;top:0;z-index:2}
+.file-status{width:12px;text-align:center;font-weight:700;flex:none}
+.file-status.A{color:var(--green)}
+.file-status.M{color:var(--accent)}
+.file-status.D{color:var(--red)}
+.file-path{flex:1;color:#d2d2d8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.file-stat{flex:none;font-size:11px;color:var(--text-faint)}
+.file-stat .add{color:var(--green)}
+.file-stat .del{color:var(--red)}
+.file-diff{overflow-x:auto;overflow-y:hidden;padding:3px 0}
+.diff-inner{width:max-content;min-width:100%}
+.dl{display:flex;line-height:18px;white-space:pre}
+.dl .ln{flex:none;width:42px;text-align:right;padding-right:8px;color:#4c4c55;user-select:none}
+.dl .code{flex:1;padding-left:8px;padding-right:28px;color:#b9b9c0}
+.dl.add{background:rgba(78,156,92,.13)}
+.dl.add .code{color:#b6e9be}
+.dl.del{background:rgba(190,70,80,.12)}
+.dl.del .code{color:#f2acb1}
+.dl.hunk{background:rgba(70,95,130,.16)}
+.dl.hunk .code{color:#7d94ad}
+.dl.meta .code{color:var(--text-faint)}
+.dl.note .code{color:var(--text-faint);font-style:italic}
+.tk-c{color:#6e8a6e;font-style:italic}
+.tk-s{color:#ce9178}
+.tk-k{color:#c586c0}
+.tk-n{color:#b5cea8}
+.empty{padding:36px 20px;text-align:center;color:var(--text-faint);line-height:1.9}
+.empty b{color:var(--text-dim)}
+.empty code{background:#26262b;border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--accent)}
+.statusbar{display:flex;justify-content:space-between;align-items:center;padding:0 12px;background:var(--panel);border-top:1px solid var(--border);color:var(--text-faint);font-size:11px}
+.statusbar .ok{color:var(--green)}
+.toast{position:fixed;left:50%;bottom:44px;transform:translate(-50%,8px);background:#30303a;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:4px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:50;max-width:80vw}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.overlay{position:fixed;inset:0;background:rgba(20,20,23,.82);display:none;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px)}
+.overlay.show{display:flex}
+.overlay-box{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:22px 34px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,.6);min-width:300px;max-width:90vw}
+.spin{width:26px;height:26px;margin:0 auto 12px;border:2.5px solid #3a3a42;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#overlayText{color:var(--text-dim);font-size:12px;line-height:1.7;white-space:pre-line}
+.modal{position:fixed;inset:0;background:rgba(20,20,23,.7);display:none;align-items:center;justify-content:center;z-index:120;backdrop-filter:blur(2px)}
+.modal.show{display:flex}
+.modal-box{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:22px;width:min(560px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.7);max-height:90vh;overflow-y:auto}
+.modal-box h3{margin:0 0 16px;font-size:14px;color:#f0f0f3;font-weight:600}
+.modal-field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.modal-field label{font-size:11px;color:var(--text-dim)}
+.modal-field input{background:#17171a;border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font:inherit;outline:none;transition:border-color .12s}
+.modal-field input:focus{border-color:var(--accent-dim);background:#131316}
+.modal-hint{font-size:11px;color:var(--text-faint);line-height:1.7;background:#1a1a1e;border:1px solid var(--border-soft);border-radius:4px;padding:8px 10px;margin-top:4px}
+.modal-hint code{color:var(--accent);background:transparent}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.modal-examples{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.modal-examples button{background:#25252b;border:1px solid var(--border);color:var(--text-dim);padding:2px 7px;border-radius:3px;font:inherit;font-size:10px;cursor:pointer}
+.modal-examples button:hover{background:#303038;color:var(--text)}
+.dir-picker{display:flex;align-items:center;gap:8px}
+.dir-picker .picked{flex:1;color:var(--text-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#17171a;border:1px solid var(--border);padding:7px 10px;border-radius:4px}
+.dir-picker .picked.none{color:var(--text-faint);font-style:italic}
+@media (max-width:920px){.main{grid-template-columns:1fr 1.3fr}.sidebar{display:none}}
+@media (max-width:640px){.main{grid-template-columns:1fr}.detail{display:none}.tb-right .btn:not(.accent){display:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="tb-left">
+      <span class="logo">GitDeck</span>
+      <span class="crumb">/</span>
+      <span class="repo-name" id="repoName">未打开仓库</span>
+      <span class="branch-tag" id="headTag">—</span>
+      <span class="src-tag" id="srcTag" style="display:none"></span>
+    </div>
+    <div class="tb-center">
+      <input id="search" class="search-input" type="text" placeholder="搜索提交、作者或 SHA…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="tb-right">
+      <button class="btn" id="refreshBtn" disabled>重新加载</button>
+      <button class="btn accent" id="cloneBtn">克隆到本地</button>
+      <button class="btn" id="openBtn">打开本地</button>
+    </div>
+  </header>
+  <div class="main">
+    <aside class="sidebar" id="sidebar"></aside>
+    <section class="commits">
+      <div class="commit-scroll" id="commitScroll">
+        <div class="commit-inner">
+          <svg class="graph" id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="rows" id="rows"></div>
+        </div>
+      </div>
+    </section>
+    <section class="detail">
+      <div class="detail-scroll">
+        <div class="detail-head" id="detailHead"></div>
+        <div class="detail-body" id="detailBody"></div>
+      </div>
+    </section>
+  </div>
+  <footer class="statusbar">
+    <span id="statusLeft">就绪</span>
+    <span id="statusRight">UTF-8 · LF</span>
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay">
+  <div class="overlay-box">
+    <div class="spin"></div>
+    <div id="overlayText">正在处理…</div>
+  </div>
+</div>
+<div class="modal" id="cloneModal">
+  <div class="modal-box">
+    <h3>克隆仓库到本地磁盘</h3>
+    <div class="modal-field">
+      <label>仓库 URL（HTTPS）</label>
+      <input id="cloneUrl" type="text" placeholder="https://github.com/user/repo.git" autocomplete="off" spellcheck="false">
+      <div class="modal-examples">
+        <button data-fill="https://github.com/octocat/Hello-World.git">octocat/Hello-World</button>
+        <button data-fill="https://github.com/sindresorhus/awesome.git">awesome</button>
+        <button data-fill="https://github.com/git/git.git">git/git</button>
+      </div>
+    </div>
+    <div class="modal-field">
+      <label>CORS 代理 URL（可选 · 跨域时必填）</label>
+      <input id="cloneProxy" type="text" placeholder="https://your-worker.workers.dev" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="modal-field">
+      <label>克隆到目录</label>
+      <div class="dir-picker">
+        <div class="picked none" id="pickedDir">未选择</div>
+        <button class="btn" id="pickDirBtn">选择…</button>
+      </div>
+    </div>
+    <div class="modal-hint">
+      <b style="color:var(--text-dim)">浏览器跨域</b>：GitHub 等站点默认不开 CORS，直连会被浏览器拦截。请在 Cloudflare Worker 部署转发脚本（见 <code>worker/</code> 目录），收到 <code>?url=…</code> 后返回带 <code>Access-Control-Allow-Origin: *</code> 的内容，再把 Worker 地址填到上面。
+      <br><br>
+      <b style="color:var(--text-dim)">磁盘克隆</b>：将在选定目录下创建 <code>.git</code>（含 packfile + idx + refs + config），并检出当前分支的最新工作树，得到一个真正的本地 Git 仓库。
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="cloneCancel">取消</button>
+      <button class="btn accent" id="cloneStart" disabled>开始克隆</button>
+    </div>
+  </div>
+</div>
+<script>
+const $=(s)=>document.querySelector(s);
+const TD=new TextDecoder('utf-8',{fatal:false});
+const ENC=new TextEncoder();
+const hex=(u8)=>{let s='';for(let i=0;i<u8.length;i++)s+=u8[i].toString(16).padStart(2,'0');return s;};
+const hexToBytes=(s)=>{const u=new Uint8Array(s.length/2);for(let i=0;i<u.length;i++)u[i]=parseInt(s.substr(i*2,2),16);return u;};
+const escapeHtml=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function showToast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(showToast._t);showToast._t=setTimeout(()=>t.classList.remove('show'),2600);}
+function overlay(show,text){const el=$('#overlay');if(text)$('#overlayText').textContent=text;el.classList.toggle('show',!!show);}
+const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=(c&1)?(0xedb88320^(c>>>1)):(c>>>1);t[i]=c>>>0;}return t;})();
+function crc32(data){let c=0xffffffff;for(let i=0;i<data.length;i++)c=CRC_TABLE[(c^data[i])&0xff]^(c>>>8);return (c^0xffffffff)>>>0;}
+async function sha1Bytes(data){return new Uint8Array(await crypto.subtle.digest('SHA-1',data));}
+const OBJ={1:'commit',2:'tree',3:'blob',4:'tag'};
+async function computeSha(type,data){const name=OBJ[type];const header=ENC.encode(name+' '+data.length+'\0');const buf=new Uint8Array(header.length+data.length);buf.set(header,0);buf.set(data,header.length);return hex(await sha1Bytes(buf));}
+function inflateWithConsumed(input,start){
+  let pos=start,bitBuf=0,bitCnt=0;
+  const readBit=()=>{if(bitCnt===0){if(pos>=input.length)throw new Error('inflate: 数据意外结束');bitBuf=input[pos++];bitCnt=8;}const b=bitBuf&1;bitBuf>>>=1;bitCnt--;return b;};
+  const readBits=(n)=>{let v=0;for(let i=0;i<n;i++)v|=readBit()<<i;return v;};
+  const align=()=>{bitBuf=0;bitCnt=0;};
+  if(pos+2>input.length)throw new Error('inflate: 缺少 zlib 头');
+  const cmf=input[pos++],flg=input[pos++];
+  if((cmf&0x0f)!==8)throw new Error('inflate: 压缩方法不支持');
+  if(flg&0x20)pos+=4;
+  let out=new Uint8Array(4096);let outLen=0;
+  const ensure=(n)=>{if(outLen+n>out.length){let nl=out.length*2;while(nl<outLen+n)nl*=2;const nb=new Uint8Array(nl);nb.set(out.subarray(0,outLen));out=nb;}};
+  const LBASE=[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  const LEXT=[0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  const DBASE=[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  const DEXT=[0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  const buildHuffman=(lengths)=>{let maxLen=0;for(const l of lengths)if(l>maxLen)maxLen=l;if(maxLen===0)return{table:null,maxLen:0};const blCount=new Array(maxLen+1).fill(0);for(const l of lengths)if(l>0)blCount[l]++;const nextCode=new Array(maxLen+1).fill(0);let code=0;for(let i=1;i<=maxLen;i++){code=(code+blCount[i-1])<<1;nextCode[i]=code;}const table=[];for(let l=1;l<=maxLen;l++)table[l]=new Map();for(let i=0;i<lengths.length;i++){const l=lengths[i];if(l===0)continue;table[l].set(nextCode[l]++,i);}return{table,maxLen};};
+  const decodeSym=(huff)=>{let code=0;for(let l=1;l<=huff.maxLen;l++){code=(code<<1)|readBit();const sym=huff.table[l].get(code);if(sym!==undefined)return sym;}throw new Error('inflate: 无效的霍夫曼编码');};
+  let final=false;
+  while(!final){
+    final=readBit()===1;const btype=readBits(2);
+    if(btype===0){align();const len=input[pos]|(input[pos+1]<<8);const nlen=input[pos+2]|(input[pos+3]<<8);if((len^0xffff)!==nlen)throw new Error('inflate: 存储块长度校验失败');pos+=4;ensure(len);out.set(input.subarray(pos,pos+len),outLen);outLen+=len;pos+=len;}
+    else if(btype===1||btype===2){
+      let litHuff,distHuff;
+      if(btype===1){const ll=new Array(288);for(let i=0;i<144;i++)ll[i]=8;for(let i=144;i<256;i++)ll[i]=9;for(let i=256;i<280;i++)ll[i]=7;for(let i=280;i<288;i++)ll[i]=8;litHuff=buildHuffman(ll);distHuff=buildHuffman(new Array(30).fill(5));}
+      else{const hlit=readBits(5)+257;const hdist=readBits(5)+1;const hclen=readBits(4)+4;const order=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];const clLens=new Array(19).fill(0);for(let i=0;i<hclen;i++)clLens[order[i]]=readBits(3);const clHuff=buildHuffman(clLens);const allLens=[];while(allLens.length<hlit+hdist){const sym=decodeSym(clHuff);if(sym<16)allLens.push(sym);else if(sym===16){const rep=readBits(2)+3;const last=allLens[allLens.length-1];for(let i=0;i<rep;i++)allLens.push(last);}else if(sym===17){const rep=readBits(3)+3;for(let i=0;i<rep;i++)allLens.push(0);}else{const rep=readBits(7)+11;for(let i=0;i<rep;i++)allLens.push(0);}}litHuff=buildHuffman(allLens.slice(0,hlit));distHuff=buildHuffman(allLens.slice(hlit));}
+      while(true){const sym=decodeSym(litHuff);if(sym<256){ensure(1);out[outLen++]=sym;}else if(sym===256)break;else{const li=sym-257;if(li>=LBASE.length)throw new Error('inflate: 长度码越界');const length=LBASE[li]+readBits(LEXT[li]);const dsym=decodeSym(distHuff);if(dsym>=DBASE.length)throw new Error('inflate: 距离码越界');const dist=DBASE[dsym]+readBits(DEXT[dsym]);if(dist>outLen)throw new Error('inflate: 距离超出已输出范围');ensure(length);for(let i=0;i<length;i++){out[outLen]=out[outLen-dist];outLen++;}}}
+    }
+    else throw new Error('inflate: 无效的块类型');
+  }
+  align();pos+=4;
+  return {data:out.subarray(0,outLen),consumed:pos-start};
+}
+function applyDelta(base,delta){
+  let p=0;const varint=()=>{let v=0,shift=0,b;do{b=delta[p++];v+=(b&0x7f)*Math.pow(2,shift);shift+=7;}while(b&0x80);return v;};
+  varint();const tgtSize=varint();const out=new Uint8Array(tgtSize);let o=0;
+  while(p<delta.length){const cmd=delta[p++];if(cmd&0x80){let cpOff=0,cpSize=0;if(cmd&0x01)cpOff|=delta[p++];if(cmd&0x02)cpOff|=delta[p++]<<8;if(cmd&0x04)cpOff|=delta[p++]<<16;if(cmd&0x08)cpOff|=delta[p++]<<24;cpOff=cpOff>>>0;if(cmd&0x10)cpSize|=delta[p++];if(cmd&0x20)cpSize|=delta[p++]<<8;if(cmd&0x40)cpSize|=delta[p++]<<16;if(cpSize===0)cpSize=0x10000;out.set(base.subarray(cpOff,cpOff+cpSize),o);o+=cpSize;}else if(cmd){out.set(delta.subarray(p,p+cmd),o);o+=cmd;p+=cmd;}else throw new Error('delta: opcode 为 0');}
+  return out;
+}
+function parsePackAt(buf,packStart){
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  if(buf[packStart]!==0x50||buf[packStart+1]!==0x41||buf[packStart+2]!==0x43||buf[packStart+3]!==0x4b)throw new Error('不是有效的 PACK');
+  const version=dv.getUint32(packStart+4);const count=dv.getUint32(packStart+8);
+  if(version!==2&&version!==3)throw new Error('不支持的 pack 版本 '+version);
+  const objects=[];let pos=packStart+12;
+  for(let i=0;i<count;i++){
+    const objStart=pos;let b=buf[pos++];const type=(b>>4)&7;let size=b&0x0f;let shift=4;
+    while(b&0x80){b=buf[pos++];size|=(b&0x7f)<<shift;shift+=7;}
+    let baseOffset=null;
+    if(type===6){let b2=buf[pos++];let off=b2&0x7f;while(b2&0x80){b2=buf[pos++];off=((off+1)<<7)|(b2&0x7f);}baseOffset=objStart-off;}
+    else if(type===7)throw new Error('不支持 REF_DELTA');
+    const {data,consumed}=inflateWithConsumed(buf,pos);pos+=consumed;
+    objects.push({start:objStart,end:pos,type,data,baseOffset,resolved:type!==6});
+  }
+  const packEnd=pos+20;
+  const byOffset=new Map();for(const o of objects)byOffset.set(o.start,o);
+  const resolve=(obj)=>{if(obj.resolved)return obj;const base=byOffset.get(obj.baseOffset);if(!base)throw new Error('delta 基础对象缺失');resolve(base);obj.data=applyDelta(base.data,obj.data);obj.type=base.type;obj.resolved=true;return obj;};
+  for(const o of objects)resolve(o);
+  return {objects,packEnd};
+}
+async function generateIdx(objects,packBody){
+  const n=objects.length;const sorted=[...objects].sort((a,b)=>a.sha<b.sha?-1:a.sha>b.sha?1:0);
+  const fanout=new Uint32Array(256);for(const o of objects)fanout[parseInt(o.sha.slice(0,2),16)]++;
+  let sum=0;for(let i=0;i<256;i++){sum+=fanout[i];fanout[i]=sum;}
+  const size=8+256*4+n*20+n*4+n*4+20;const out=new Uint8Array(size);const dv=new DataView(out.buffer);let p=0;
+  dv.setUint32(p,0xff744f63);p+=4;dv.setUint32(p,2);p+=4;
+  for(let i=0;i<256;i++){dv.setUint32(p,fanout[i]);p+=4;}
+  for(const o of sorted){out.set(hexToBytes(o.sha),p);p+=20;}
+  for(const o of sorted){dv.setUint32(p,o.crc32>>>0);p+=4;}
+  for(const o of sorted){dv.setUint32(p,o.packOffset);p+=4;}
+  out.set(await sha1Bytes(packBody),p);return out;
+}
+async function writeBytes(dir,name,bytes){const fh=await dir.getFileHandle(name,{create:true});const w=await fh.createWritable();await w.write(bytes);await w.close();}
+async function writeText(dir,name,text){return writeBytes(dir,name,ENC.encode(text));}
+function buildPkt(str){const b=ENC.encode(str);return {header:ENC.encode((b.length+4).toString(16).padStart(4,'0')),body:b};}
+async function cloneToDisk(url,proxy,targetDir,onProgress){
+  url=url.replace(/\/+$/,'');
+  const proxied=(u)=>proxy?proxy.replace(/\/+$/,'')+'/?url='+encodeURIComponent(u):u;
+  onProgress('获取远程引用…');
+  let infoRes;
+  try{infoRes=await fetch(proxied(url+'/info/refs?service=git-upload-pack'),{headers:{'Accept':'application/x-git-upload-pack-advertisement'}});}
+  catch(e){throw new Error('网络请求失败（很可能是跨域）。请填写代理地址。原始：'+e.message);}
+  if(!infoRes.ok)throw new Error('获取引用失败：HTTP '+infoRes.status);
+  const infoData=new Uint8Array(await infoRes.arrayBuffer());
+  const refs={};let headSha=null;let p=0;
+  while(p+4<=infoData.length){
+    const len=parseInt(TD.decode(infoData.subarray(p,p+4)),16);p+=4;
+    if(len===0)continue;if(len<4)break;
+    const payload=infoData.subarray(p,p+len-4);p+=len-4;
+    const text=TD.decode(payload);if(text.startsWith('# service=')||text.startsWith('version '))continue;
+    const clean=text.replace(/\0[\s\S]*$/,'').trim();const m=/^([0-9a-f]{40})\s+(.+)$/.exec(clean);
+    if(!m)continue;refs[m[2]]=m[1];if(m[2]==='HEAD')headSha=m[1];
+  }
+  const wantShas=[...new Set(Object.values(refs))].filter((s)=>/^[0-9a-f]{40}$/.test(s));
+  if(!wantShas.length)throw new Error('远程仓库没有任何引用');
+  onProgress('构造 upload-pack 请求…');
+  const parts=[];const first=buildPkt('want '+wantShas[0]+' ofs-delta no-progress\n');parts.push(first.header,first.body);
+  for(let i=1;i<wantShas.length;i++){const k=buildPkt('want '+wantShas[i]+'\n');parts.push(k.header,k.body);}
+  parts.push(ENC.encode('0000'));const done=buildPkt('done\n');parts.push(done.header,done.body);
+  let total=0;for(const x of parts)total+=x.length;const reqBody=new Uint8Array(total);let off=0;
+  for(const x of parts){reqBody.set(x,off);off+=x.length;}
+  onProgress('下载 packfile（可能较大，请稍候）…');
+  let packRes;
+  try{packRes=await fetch(proxied(url+'/git-upload-pack'),{method:'POST',headers:{'Content-Type':'application/x-git-upload-pack-request','Accept':'application/x-git-upload-pack-result'},body:reqBody});}
+  catch(e){throw new Error('拉取 pack 失败：'+e.message);}
+  if(!packRes.ok)throw new Error('拉取 pack 失败：HTTP '+packRes.status);
+  const respData=new Uint8Array(await packRes.arrayBuffer());
+  let packStart=-1;
+  for(let i=0;i<respData.length-4;i++){if(respData[i]===0x50&&respData[i+1]===0x41&&respData[i+2]===0x43&&respData[i+3]===0x4b){packStart=i;break;}}
+  if(packStart<0)throw new Error('响应中没有找到 packfile（可能服务器要求认证）');
+  onProgress('解析 packfile…');
+  const {objects,packEnd}=parsePackAt(respData,packStart);
+  const packData=respData.subarray(packStart,packEnd);
+  onProgress(`计算 ${objects.length} 个对象指纹…`);
+  for(const o of objects){o.packOffset=o.start-packStart;o.crc32=crc32(packData.subarray(o.start-packStart,o.end-packStart));o.sha=await computeSha(o.type,o.data);}
+  onProgress('创建 .git 目录…');
+  let already=null;try{already=await targetDir.getDirectoryHandle('.git');}catch{}
+  if(already)throw new Error('目标目录下已经存在 .git，请选择空目录或删除已有仓库');
+  const gitDir=await targetDir.getDirectoryHandle('.git',{create:true});
+  const objectsDir=await gitDir.getDirectoryHandle('objects',{create:true});
+  const packDir=await objectsDir.getDirectoryHandle('pack',{create:true});
+  onProgress('写入 packfile 和索引…');
+  const packBody=packData.subarray(0,packData.length-20);
+  const packSha=await sha1Bytes(packBody);
+  const packName='pack-'+hex(packSha);
+  await writeBytes(packDir,packName+'.pack',packData);
+  const idxBytes=await generateIdx(objects,packBody);
+  await writeBytes(packDir,packName+'.idx',idxBytes);
+  onProgress('写入引用…');
+  const refsDir=await gitDir.getDirectoryHandle('refs',{create:true});
+  const headsDir=await refsDir.getDirectoryHandle('heads',{create:true});
+  const tagsDir=await refsDir.getDirectoryHandle('tags',{create:true});
+  const remotesDir=await refsDir.getDirectoryHandle('remotes',{create:true});
+  const originDir=await remotesDir.getDirectoryHandle('origin',{create:true});
+  for(const [refName,sha] of Object.entries(refs)){
+    if(refName==='HEAD')continue;
+    if(refName.startsWith('refs/heads/')){const n=refName.slice(11);await writeText(headsDir,n,sha+'\n');await writeText(originDir,n,sha+'\n');}
+    else if(refName.startsWith('refs/tags/')){const n=refName.slice(10);await writeText(tagsDir,n,sha+'\n');}
+  }
+  let headRef=null;
+  if(headSha){for(const [r,s] of Object.entries(refs)){if(r.startsWith('refs/heads/')&&s===headSha){headRef=r;break;}}}
+  if(!headRef){const b=Object.keys(refs).find((r)=>r.startsWith('refs/heads/'));headRef=b||'refs/heads/main';}
+  await writeText(gitDir,'HEAD','ref: '+headRef+'\n');
+  const branchName=headRef.replace('refs/heads/','');
+  const config=`[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "${branchName}"]\n\tremote = origin\n\tmerge = ${headRef}\n`;
+  await writeText(gitDir,'config',config);
+  onProgress('检出工作树…');
+  const shaToObj=new Map(objects.map((o)=>[o.sha,o]));
+  let fileCount=0;
+  async function parseCommitFromPack(sha){const o=shaToObj.get(sha);if(!o||o.type!=='commit')throw new Error('找不到 commit '+sha);const text=TD.decode(o.data);const sep=text.indexOf('\n\n');const head=sep<0?text:text.slice(0,sep);let tree=null,parents=[];for(const line of head.split('\n')){if(line.startsWith('tree '))tree=line.slice(5).trim();else if(line.startsWith('parent '))parents.push(line.slice(7).trim());}return {sha,tree,parents};}
+  async function treeEntriesFromPack(sha){const o=shaToObj.get(sha);if(!o||o.type!=='tree')return [];const d=o.data;const entries=[];let q=0;while(q<d.length){let sp=q;while(d[sp]!==0x20)sp++;const mode=TD.decode(d.subarray(q,sp));q=sp+1;let z=q;while(d[z]!==0)z++;const name=TD.decode(d.subarray(q,z));q=z+1;const oid=hex(d.subarray(q,q+20));q+=20;const type=(mode==='40000'||mode==='040000')?'tree':(mode==='160000'?'commit':'blob');entries.push({mode,name,sha:oid,type});}return entries;}
+  async function checkoutTree(dir,treeSha){const entries=await treeEntriesFromPack(treeSha);for(const e of entries){if(e.type==='tree'){const sub=await dir.getDirectoryHandle(e.name,{create:true});await checkoutTree(sub,e.sha);}else if(e.type==='blob'){const o=shaToObj.get(e.sha);if(!o)continue;await writeBytes(dir,e.name,o.data);fileCount++;if(fileCount%200===0)onProgress(`检出工作树… 已写入 ${fileCount} 个文件`);}}}
+  const headCommit=await parseCommitFromPack(headSha);
+  await checkoutTree(targetDir,headCommit.tree);
+  return {gitDir,branchName,fileCount};
+}
+class GitRepo{
+  constructor(gitDir,workDir,name){this.git=gitDir;this.work=workDir;this.name=name;this.packs=[];this.objCache=new Map();this.treeCache=new Map();this.commitCache=new Map();this.refs={branch:{},tag:{},remote:{}};this.headRef=null;this.detached=null;this.source='local';}
+  async _file(rel){const parts=rel.split('/').filter(Boolean);let d=this.git;for(let i=0;i<parts.length-1;i++)d=await d.getDirectoryHandle(parts[i]);const fh=await d.getFileHandle(parts[parts.length-1]);return new Uint8Array(await (await fh.getFile()).arrayBuffer());}
+  async _text(rel){return TD.decode(await this._file(rel));}
+  async _dir(rel){const parts=rel.split('/').filter(Boolean);let d=this.git;for(const p of parts)d=await d.getDirectoryHandle(p);return d;}
+  _setRef(full,sha){const short=full.replace(/^refs\//,'');if(short.startsWith('heads/'))this.refs.branch[short.slice(6)]=sha;else if(short.startsWith('tags/'))this.refs.tag[short.slice(5)]=sha;else if(short.startsWith('remotes/'))this.refs.remote[short.slice(8)]=sha;}
+  async _walkRefs(path){let dir;try{dir=await this._dir(path);}catch{return;}for await(const [name,h] of dir.entries()){const full=path+'/'+name;if(h.kind==='directory'){await this._walkRefs(full);continue;}try{const txt=TD.decode(await new Uint8Array(await (await h.getFile()).arrayBuffer())).trim();const sha=txt.split('\n')[0].trim();if(/^[0-9a-f]{40}$/.test(sha))this._setRef(full,sha);}catch{}}}
+  async loadRefs(){try{const txt=await this._text('packed-refs');for(const line of txt.split('\n')){if(!line||line[0]==='#'||line[0]==='^')continue;const sp=line.indexOf(' ');if(sp<0)continue;const sha=line.slice(0,sp).trim(),nm=line.slice(sp+1).trim();if(/^[0-9a-f]{40}$/.test(sha))this._setRef(nm,sha);}}catch{}await this._walkRefs('refs/heads');await this._walkRefs('refs/tags');await this._walkRefs('refs/remotes');try{const h=(await this._text('HEAD')).trim();if(h.startsWith('ref: '))this.headRef=h.slice(5).trim().replace(/^refs\//,'');else if(/^[0-9a-f]{40}$/.test(h))this.detached=h;}catch{}if(!this.headRef&&!this.detached){const first=Object.keys(this.refs.branch)[0];if(first)this.headRef='heads/'+first;}}
+  get headSha(){if(this.detached)return this.detached;if(!this.headRef)return null;const r=this.headRef.replace(/^refs\//,'');if(r.startsWith('heads/'))return this.refs.branch[r.slice(6)]||null;if(r.startsWith('tags/'))return this.refs.tag[r.slice(5)]||null;if(r.startsWith('remotes/'))return this.refs.remote[r.slice(8)]||null;return null;}
+  get headName(){if(this.detached)return 'detached@'+this.detached.slice(0,7);return (this.headRef||'').replace(/^refs\//,'').replace(/^heads\//,'');}
+  _parseIdx(idx,pack){const dv=new DataView(idx.buffer,idx.byteOffset,idx.byteLength);if(dv.getUint32(0)!==0xff744f63)throw new Error('idx 魔数错误');if(dv.getUint32(4)!==2)throw new Error('仅支持 pack idx v2');const n=dv.getUint32(8+255*4);let p=8+256*4;const shaBase=p;p+=n*20;p+=n*4;const off32=p;p+=n*4;const off64=p;const map=new Map();for(let i=0;i<n;i++){const sha=hex(idx.subarray(shaBase+i*20,shaBase+i*20+20));let o=dv.getUint32(off32+i*4);if(o&0x80000000)o=Number(dv.getBigUint64(off64+(o&0x7fffffff)*8));map.set(sha,o);}return {map,pack,cache:new Map()};}
+  async loadPacks(){let dir;try{dir=await this._dir('objects/pack');}catch{return;}for await(const [name,h] of dir.entries()){if(!name.endsWith('.idx'))continue;const base=name.slice(0,-4);try{const idxBuf=new Uint8Array(await (await h.getFile()).arrayBuffer());const ph=await dir.getFileHandle(base+'.pack');const packBuf=new Uint8Array(await (await ph.getFile()).arrayBuffer());this.packs.push(this._parseIdx(idxBuf,packBuf));}catch{}}}
+  async _readPackedAt(pk,offset){if(pk.cache.has(offset))return pk.cache.get(offset);const d=pk.pack;let p=offset;let b=d[p++];const type=(b>>4)&7;while(b&0x80)b=d[p++];let result;if(type===6){let b2=d[p++];let off=b2&0x7f;while(b2&0x80){b2=d[p++];off=((off+1)*128)+(b2&0x7f);}const base=await this._readPackedAt(pk,offset-off);const {data:delta}=inflateWithConsumed(d,p);result={type:base.type,data:applyDelta(base.data,delta)};}else if(type===7){const baseSha=hex(d.subarray(p,p+20));p+=20;const base=await this.readObject(baseSha);const {data:delta}=inflateWithConsumed(d,p);result={type:base.type,data:applyDelta(base.data,delta)};}else{const {data}=inflateWithConsumed(d,p);result={type:OBJ[type],data};}pk.cache.set(offset,result);return result;}
+  async readObject(sha){if(this.objCache.has(sha))return this.objCache.get(sha);let obj=null;try{const raw=await this._file('objects/'+sha.slice(0,2)+'/'+sha.slice(2));const {data}=inflateWithConsumed(raw,0);let z=0;while(data[z]!==0)z++;obj={type:TD.decode(data.subarray(0,z)).split(' ')[0],data:data.subarray(z+1)};}catch{}if(!obj){for(const pk of this.packs){const off=pk.map.get(sha);if(off!==undefined){obj=await this._readPackedAt(pk,off);break;}}}if(!obj)throw new Error('找不到对象 '+sha);this.objCache.set(sha,obj);return obj;}
+  async parseCommit(sha){if(this.commitCache.has(sha))return this.commitCache.get(sha);const o=await this.readObject(sha);if(o.type!=='commit')throw new Error(sha+' 不是 commit');const text=TD.decode(o.data);const sep=text.indexOf('\n\n');const head=sep<0?text:text.slice(0,sep);const message=sep<0?'':text.slice(sep+2);let tree=null,parents=[],author='',authorDate=0,committerDate=0;for(const line of head.split('\n')){if(line.startsWith('tree '))tree=line.slice(5).trim();else if(line.startsWith('parent '))parents.push(line.slice(7).trim());else if(line.startsWith('author ')){const m=/^(.*?)\s*<.*?>\s*(\d+)\s+([+-]\d{4})$/.exec(line.slice(7));if(m){author=m[1];authorDate=+m[2]*1000;}}else if(line.startsWith('committer ')){const m=/^(.*?)\s*<.*?>\s*(\d+)\s+([+-]\d{4})$/.exec(line.slice(10));if(m)committerDate=+m[2]*1000;}}const lines=message.split('\n');const c={sha,tree,parents,author,authorDate,committerDate,subject:lines[0]||'(无提交信息)',body:lines.slice(1).join('\n').trim(),message};this.commitCache.set(sha,c);return c;}
+  async treeEntries(sha){if(this.treeCache.has(sha))return this.treeCache.get(sha);const o=await this.readObject(sha);if(o.type!=='tree'){this.treeCache.set(sha,[]);return [];}const d=o.data;const entries=[];let p=0;while(p<d.length){let sp=p;while(d[sp]!==0x20)sp++;const mode=TD.decode(d.subarray(p,sp));p=sp+1;let z=p;while(d[z]!==0)z++;const name=TD.decode(d.subarray(p,z));p=z+1;const oid=hex(d.subarray(p,p+20));p+=20;const type=(mode==='40000'||mode==='040000')?'tree':(mode==='160000'?'commit':'blob');entries.push({mode,name,sha:oid,type});}this.treeCache.set(sha,entries);return entries;}
+  async blobText(sha){const o=await this.readObject(sha);if(o.type!=='blob')return {binary:true,text:''};const d=o.data;const n=Math.min(d.length,8000);for(let i=0;i<n;i++)if(d[i]===0)return {binary:true,text:''};return {binary:false,text:TD.decode(d)};}
+  async walkCommits(tips,limit=2000,onProgress){const seen=new Map(),pending=new Set(),queue=[];for(const t of tips)if(t&&!pending.has(t)){pending.add(t);queue.push(t);}while(queue.length&&seen.size<limit){const batch=queue.splice(0,64);const results=await Promise.all(batch.map((s)=>this.parseCommit(s).catch(()=>null)));for(const c of results){if(!c||seen.has(c.sha))continue;seen.set(c.sha,c);for(const p of c.parents)if(!seen.has(p)&&!pending.has(p)){pending.add(p);queue.push(p);}}if(onProgress)onProgress(seen.size);}return [...seen.values()].sort((a,b)=>(b.committerDate-a.committerDate)||(a.sha<b.sha?-1:1));}
+}
+async function collectAll(repo,entry,prefix,status,out){if(entry.type==='tree'){const subs=await repo.treeEntries(entry.sha);for(const s of subs)await collectAll(repo,s,prefix+'/'+s.name,status,out);}else{out.push({path:prefix,status,oldSha:status==='D'?entry.sha:null,newSha:status==='A'?entry.sha:null});}}
+async function diffTrees(repo,oldSha,newSha,prefix,out){const oldMap=new Map(),newMap=new Map();if(oldSha)for(const e of await repo.treeEntries(oldSha))oldMap.set(e.name,e);if(newSha)for(const e of await repo.treeEntries(newSha))newMap.set(e.name,e);const names=new Set([...oldMap.keys(),...newMap.keys()]);for(const name of names){const o=oldMap.get(name),n=newMap.get(name);const path=prefix?prefix+'/'+name:name;if(o&&n&&o.sha===n.sha&&o.mode===n.mode)continue;const oTree=o&&o.type==='tree';const nTree=n&&n.type==='tree';if(oTree&&nTree)await diffTrees(repo,o.sha,n.sha,path,out);else if(oTree||nTree){if(o)await collectAll(repo,o,path,'D',out);if(n)await collectAll(repo,n,path,'A',out);}else{out.push({path,status:!o?'A':!n?'D':'M',oldSha:o?o.sha:null,newSha:n?n.sha:null});}}return out;}
+function splitLines(t){if(t==='')return [];const a=t.replace(/\r\n/g,'\n').split('\n');if(a[a.length-1]==='')a.pop();return a;}
+function myers(a,b){const n=a.length,m=b.length,max=n+m;if(max===0)return [];if(max>6000){const ops=[];for(let i=0;i<n;i++)ops.push({t:'del',ax:i});for(let j=0;j<m;j++)ops.push({t:'add',by:j});return ops;}const offset=max;const v=new Int32Array(2*max+2);const trace=[];let found=-1;for(let d=0;d<=max;d++){trace.push(v.slice());for(let k=-d;k<=d;k+=2){let x;if(k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1]))x=v[offset+k+1];else x=v[offset+k-1]+1;let y=x-k;while(x<n&&y<m&&a[x]===b[y]){x++;y++;}v[offset+k]=x;if(x>=n&&y>=m){found=d;break;}}if(found>=0)break;}const ops=[];let x=n,y=m;for(let d=trace.length-1;d>=0;d--){const vv=trace[d];const k=x-y;let prevK;if(k===-d||(k!==d&&vv[offset+k-1]<vv[offset+k+1]))prevK=k+1;else prevK=k-1;const prevX=vv[offset+prevK];const prevY=prevX-prevK;while(x>prevX&&y>prevY){ops.push({t:'ctx',ax:x-1,by:y-1});x--;y--;}if(d>0){if(x===prevX){ops.push({t:'add',by:y-1});y--;}else{ops.push({t:'del',ax:x-1});x--;}}}ops.reverse();return ops;}
+function diffLines(oldText,newText){const a=splitLines(oldText),b=splitLines(newText);let pre=0;while(pre<a.length&&pre<b.length&&a[pre]===b[pre])pre++;let suf=0;while(suf<a.length-pre&&suf<b.length-pre&&a[a.length-1-suf]===b[b.length-1-suf])suf++;const midA=a.slice(pre,a.length-suf),midB=b.slice(pre,b.length-suf);const ops=[];for(let i=0;i<pre;i++)ops.push({t:'ctx',ax:i,by:i});for(const op of myers(midA,midB)){if(op.t==='ctx')ops.push({t:'ctx',ax:op.ax+pre,by:op.by+pre});else if(op.t==='del')ops.push({t:'del',ax:op.ax+pre});else ops.push({t:'add',by:op.by+pre});}for(let i=0;i<suf;i++)ops.push({t:'ctx',ax:a.length-suf+i,by:b.length-suf+i});return {ops,a,b};}
+function buildHunks(ops,a,b,ctx=3){const rows=ops.map((op)=>{if(op.t==='ctx')return {type:'ctx',text:a[op.ax],oldNo:op.ax+1,newNo:op.by+1};if(op.t==='del')return {type:'del',text:a[op.ax],oldNo:op.ax+1,newNo:null};return {type:'add',text:b[op.by],oldNo:null,newNo:op.by+1};});const changed=[];rows.forEach((r,i)=>{if(r.type!=='ctx')changed.push(i);});if(!changed.length)return [];const ranges=[];let s=Math.max(0,changed[0]-ctx),e=Math.min(rows.length-1,changed[0]+ctx);for(let i=1;i<changed.length;i++){const c=changed[i];if(c-ctx<=e+1)e=Math.min(rows.length-1,c+ctx);else{ranges.push([s,e]);s=Math.max(0,c-ctx);e=Math.min(rows.length-1,c+ctx);}}ranges.push([s,e]);return ranges.map(([rs,re])=>{const slice=rows.slice(rs,re+1);const os=slice.find((r)=>r.oldNo!==null)?.oldNo??0;const ns=slice.find((r)=>r.newNo!==null)?.newNo??0;const oc=slice.filter((r)=>r.oldNo!==null).length;const nc=slice.filter((r)=>r.newNo!==null).length;return {header:`@@ -${os},${oc} +${ns},${nc} @@`,lines:slice};});}
+const KEYWORDS='const|let|var|function|return|if|else|for|while|class|new|import|export|from|await|async|of|in|this|null|true|false|typeof|default|break|continue|try|catch|throw|extends|super|yield|static|delete|void|instanceof|do|switch|case|def|elif|None|True|False|lambda|print|end|module|require|package|func|type|struct|interface|pub|fn|impl|match|use';
+const TOKEN_RE=new RegExp('(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/|#[^\\n]*)|(\'(?:[^\'\\\\]|\\\\.)*\'|"(?:[^"\\\\]|\\\\.)*")|\\b('+KEYWORDS+')\\b|\\b(\\d+(?:\\.\\d+)?)\\b','g');
+function highlight(src){return escapeHtml(src).replace(TOKEN_RE,(m,com,str,kw,num)=>{if(com)return '<span class="tk-c">'+com+'</span>';if(str)return '<span class="tk-s">'+str+'</span>';if(kw)return '<span class="tk-k">'+kw+'</span>';if(num)return '<span class="tk-n">'+num+'</span>';return m;});}
+const state={repo:null,commits:[],filtered:[],selected:null,branch:null,query:'',diffCache:new Map(),diffToken:0};
+const LANE_COLORS=['#ff9d3c','#6ab0f3','#7ec699','#c678dd','#56b6c2','#e5c07b','#e06c75'];
+const ROW_H=26,LANE_W=14,GRAPH_PAD=11;
+function computeGraph(commits){const lanes=[],laneOf=[];let maxLane=1;const index=new Map();commits.forEach((c,i)=>index.set(c.sha,i));for(let i=0;i<commits.length;i++){const c=commits[i];let lane=lanes.indexOf(c.sha);if(lane===-1){lane=lanes.length;lanes.push(c.sha);}laneOf[i]=lane;for(let k=lanes.length-1;k>lane;k--)if(lanes[k]===c.sha)lanes.splice(k,1);const parents=c.parents.filter((p)=>index.has(p));lanes[lane]=parents[0]||null;let at=lane+1;for(let k=1;k<parents.length;k++){if(lanes.indexOf(parents[k])===-1){lanes.splice(at,0,parents[k]);at++;}}for(let k=lanes.length-1;k>=0;k--)if(lanes[k]===null)lanes.splice(k,1);maxLane=Math.max(maxLane,lane+1,lanes.length);}return {laneOf,maxLane};}
+function renderGraph(commits,laneOf,maxLane){const svg=$('#graph');if(!commits.length){svg.innerHTML='';svg.setAttribute('width',0);svg.setAttribute('height',0);document.documentElement.style.setProperty('--graph-w','12px');return;}const w=GRAPH_PAD*2+maxLane*LANE_W;const h=commits.length*ROW_H;const X=(l)=>GRAPH_PAD+l*LANE_W+LANE_W/2;const Y=(i)=>i*ROW_H+ROW_H/2;const index=new Map();commits.forEach((c,i)=>index.set(c.sha,i));let paths='';for(let i=0;i<commits.length;i++){const c=commits[i];const color=LANE_COLORS[laneOf[i]%LANE_COLORS.length];for(const p of c.parents){const j=index.get(p);if(j===undefined)continue;const x1=X(laneOf[i]),y1=Y(i),x2=X(laneOf[j]),y2=Y(j);if(Math.abs(x1-x2)<0.5){paths+=`<path d="M ${x1} ${y1} L ${x1} ${y2}" stroke="${color}" stroke-width="2" fill="none" stroke-linecap="round"/>`;}else{const my=(y1+y2)/2;paths+=`<path d="M ${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}" stroke="${color}" stroke-width="2" fill="none" stroke-linecap="round"/>`;}}}let dots='';for(let i=0;i<commits.length;i++){const color=LANE_COLORS[laneOf[i]%LANE_COLORS.length];dots+=`<circle cx="${X(laneOf[i])}" cy="${Y(i)}" r="3.2" fill="${color}" stroke="#1b1b1e" stroke-width="1.2"/>`;}svg.setAttribute('width',w);svg.setAttribute('height',h);svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.innerHTML=paths+dots;document.documentElement.style.setProperty('--graph-w',(w+4)+'px');}
+function renderSidebar(){const repo=state.repo;if(!repo){$('#sidebar').innerHTML='<div class="side-title">仓库</div><div class="side-empty">未打开</div>';return;}const r=repo.refs,headSha=repo.headSha;const item=(label,color,badge,value)=>{const active=(state.branch||'')===(value||'')?' active':'';return `<div class="side-item${active}" data-branch="${escapeHtml(value||'')}"><span class="dot" style="background:${color}"></span><span class="side-name">${escapeHtml(label)}</span>${badge?`<span class="side-badge">${escapeHtml(badge)}</span>`:''}</div>`;};let html='<div class="side-title">Branches</div>';html+=item('全部提交','#5a5a62','','');const branches=Object.keys(r.branch).sort();html+=branches.length?branches.map((b)=>item(b,r.branch[b]===headSha?'var(--accent)':'var(--blue)',r.branch[b]===headSha?'HEAD':'',b)).join(''):'<div class="side-empty">无</div>';html+='<div class="side-title">Tags</div>';const tags=Object.keys(r.tag).sort();html+=tags.length?tags.map((t)=>item(t,'var(--green)','','')).join(''):'<div class="side-empty">无</div>';html+='<div class="side-title">Remotes</div>';const remotes=Object.keys(r.remote).sort();html+=remotes.length?remotes.map((m)=>item(m,'#5a5a62','','')).join(''):'<div class="side-empty">无</div>';$('#sidebar').innerHTML=html;}
+function refsForCommit(sha){const repo=state.repo,out=[];if(repo.headSha===sha)out.push({kind:'head',name:'HEAD'});for(const [n,s] of Object.entries(repo.refs.branch))if(s===sha)out.push({kind:'branch',name:n});for(const [n,s] of Object.entries(repo.refs.tag))if(s===sha)out.push({kind:'tag',name:n});for(const [n,s] of Object.entries(repo.refs.remote))if(s===sha)out.push({kind:'remote',name:n});return out.slice(0,4);}
+function fmtDate(ms){if(!ms)return '';const d=new Date(ms),p=(n)=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+function renderRows(list){const rows=$('#rows');if(!list.length){rows.innerHTML=state.repo?'<div class="empty">没有匹配的提交</div>':'<div class="empty">尚未打开仓库<br><br>点击右上角 <b>克隆到本地</b> 从远程拉取<br>或点击 <b>打开本地</b> 选择已有 .git 目录</div>';return;}rows.innerHTML=list.map((c)=>{const refs=refsForCommit(c.sha).map((r)=>`<span class="ref ${r.kind}">${escapeHtml(r.name)}</span>`).join('');return `<div class="row${c.sha===state.selected?' selected':''}" data-sha="${c.sha}">${refs?`<span class="refs">${refs}</span>`:''}<span class="subject">${escapeHtml(c.subject)}</span><span class="author">${escapeHtml(c.author)}</span><span class="date">${escapeHtml(fmtDate(c.committerDate))}</span></div>`;}).join('');}
+function renderDiffHeader(entry,add,del){return `<div class="file-block"><div class="file-head"><span class="file-status ${entry.status}">${entry.status}</span><span class="file-path" title="${escapeHtml(entry.path)}">${escapeHtml(entry.path)}</span><span class="file-stat"><span class="add">+${add}</span> <span class="del">−${del}</span></span></div>`;}
+function renderDiffBody(hunks){let html='<div class="file-diff"><div class="diff-inner">';for(const h of hunks){html+=`<div class="dl hunk"><span class="ln"></span><span class="ln"></span><span class="code">${escapeHtml(h.header)}</span></div>`;for(const l of h.lines){const o=l.oldNo===null?'':l.oldNo;const n=l.newNo===null?'':l.newNo;const cls=l.type==='add'?'add':l.type==='del'?'del':'ctx';const prefix=l.type==='add'?'+':l.type==='del'?'-':' ';html+=`<div class="dl ${cls}"><span class="ln">${o}</span><span class="ln">${n}</span><span class="code">${highlight(prefix+l.text)}</span></div>`;}}return html+'</div></div></div>';}
+async function buildDiff(repo,commit){if(state.diffCache.has(commit.sha))return state.diffCache.get(commit.sha);const parentSha=commit.parents[0]||null;let oldTree=null;if(parentSha){try{oldTree=(await repo.parseCommit(parentSha)).tree;}catch{}}const entries=await diffTrees(repo,oldTree,commit.tree,'',[]);const limited=entries.slice(0,200);const files=[];for(const e of limited){const rec={...e,hunks:[],add:0,del:0,binary:false,note:''};try{if(e.status==='A'){const b=await repo.blobText(e.newSha);if(b.binary){rec.binary=true;rec.note='二进制文件';}else{const d=diffLines('',b.text);rec.hunks=buildHunks(d.ops,d.a,d.b);rec.add=d.b.length;}}else if(e.status==='D'){const b=await repo.blobText(e.oldSha);if(b.binary){rec.binary=true;rec.note='二进制文件';}else{const d=diffLines(b.text,'');rec.hunks=buildHunks(d.ops,d.a,d.b);rec.del=d.a.length;}}else{const ob=await repo.blobText(e.oldSha);const nb=await repo.blobText(e.newSha);if(ob.binary||nb.binary){rec.binary=true;rec.note='二进制文件';}else{const d=diffLines(ob.text,nb.text);rec.hunks=buildHunks(d.ops,d.a,d.b);for(const l of rec.hunks.flatMap((h)=>h.lines)){if(l.type==='add')rec.add++;else if(l.type==='del')rec.del++;}}}}catch(err){rec.note='读取失败：'+err.message;}files.push(rec);}const result={files,total:entries.length,parentSha};state.diffCache.set(commit.sha,result);return result;}
+function renderDetailHead(commit){const refs=refsForCommit(commit.sha).map((r)=>`<span class="ref ${r.kind}">${escapeHtml(r.name)}</span>`).join('');$('#detailHead').innerHTML=`<div class="d-subject">${escapeHtml(commit.subject)}</div><div class="d-meta"><span class="d-sha">${commit.sha.slice(0,10)}</span><span>${escapeHtml(commit.author)}</span><span>${escapeHtml(fmtDate(commit.committerDate))}</span>${refs?`<span class="d-refs">${refs}</span>`:''}</div>${commit.body?`<div class="d-body">${escapeHtml(commit.body)}</div>`:''}`;}
+async function renderDetail(){const repo=state.repo;const commit=state.commits.find((c)=>c.sha===state.selected);if(!repo||!commit){$('#detailHead').innerHTML='';$('#detailBody').innerHTML='<div class="empty">选择一个提交查看差异</div>';return;}renderDetailHead(commit);const token=++state.diffToken;$('#detailBody').innerHTML='<div class="empty">正在计算差异…</div>';let diff;try{diff=await buildDiff(repo,commit);}catch(e){if(token!==state.diffToken)return;$('#detailBody').innerHTML=`<div class="empty">差异计算失败<br><b>${escapeHtml(e.message)}</b></div>`;return;}if(token!==state.diffToken)return;if(!diff.files.length){$('#detailBody').innerHTML='<div class="empty">该提交没有文件变更</div>';return;}let html='';for(const f of diff.files){html+=renderDiffHeader(f,f.add,f.del);if(f.binary||!f.hunks.length){html+=`<div class="file-diff"><div class="diff-inner"><div class="dl note"><span class="ln"></span><span class="ln"></span><span class="code">${escapeHtml(f.note||'无内容变化')}</span></div></div></div></div>`;}else html+=renderDiffBody(f.hunks);}if(diff.total>diff.files.length){html+=`<div class="empty">另有 ${diff.total-diff.files.length} 个文件未显示（单次最多 200 个）</div>`;}$('#detailBody').innerHTML=html;}
+function reachableFrom(sha){const bySha=new Map(state.commits.map((c)=>[c.sha,c]));const seen=new Set(),stack=[sha];while(stack.length){const s=stack.pop();if(seen.has(s))continue;seen.add(s);const c=bySha.get(s);if(c)for(const p of c.parents)stack.push(p);}return seen;}
+function computeFiltered(){let list=state.commits;if(state.branch){const repo=state.repo;const sha=repo.refs.branch[state.branch]||repo.refs.tag[state.branch]||repo.refs.remote[state.branch];if(sha){const reach=reachableFrom(sha);list=list.filter((c)=>reach.has(c.sha));}}if(state.query){const q=state.query.toLowerCase();list=list.filter((c)=>c.subject.toLowerCase().includes(q)||c.author.toLowerCase().includes(q)||c.sha.startsWith(q));}return list;}
+function render(){const list=computeFiltered();state.filtered=list;if(list.length&&!list.some((c)=>c.sha===state.selected))state.selected=list[0].sha;const {laneOf,maxLane}=computeGraph(list);renderGraph(list,laneOf,maxLane);renderRows(list);renderSidebar();renderDetail();const repo=state.repo;if(repo){$('#statusLeft').innerHTML=`${list.length} / ${state.commits.length} 个提交 · ${repo.packs.length} 个 packfile`;}else $('#statusLeft').textContent='就绪';}
+async function loadRepositoryFromDir(root,name){state.diffCache.clear();state.commits=[];state.selected=null;state.branch=null;state.query='';$('#search').value='';overlay(true,'定位 .git 目录…');let gitDir=null;try{gitDir=await root.getDirectoryHandle('.git');}catch{let hasObjects=false;try{await root.getDirectoryHandle('objects');hasObjects=true;}catch{}if(!hasObjects){overlay(false);showToast('该目录下没有找到 .git');return;}gitDir=root;name=name.replace(/\.git$/,'')||'repository';}const repo=new GitRepo(gitDir,root,name);repo.source='local';state.repo=repo;$('#repoName').textContent=name;$('#srcTag').style.display='';$('#srcTag').textContent='本地';try{overlay(true,'读取引用…');await repo.loadRefs();overlay(true,'读取 packfile…');await repo.loadPacks();const tips=new Set();if(repo.headSha)tips.add(repo.headSha);for(const s of Object.values(repo.refs.branch))tips.add(s);for(const s of Object.values(repo.refs.tag))tips.add(s);for(const s of Object.values(repo.refs.remote))tips.add(s);if(!tips.size){overlay(false);showToast('仓库中没有任何引用（可能还没有提交）');render();return;}overlay(true,'遍历提交历史…');const commits=await repo.walkCommits([...tips],2000,(n)=>{overlay(true,`遍历提交历史… ${n} 条`);});state.commits=commits;state.selected=commits[0]?.sha||null;$('#headTag').textContent=repo.headName||'—';$('#refreshBtn').disabled=false;overlay(false);showToast(commits.length?`已加载 ${commits.length} 个提交`:'未能读取到任何提交');render();$('#commitScroll').scrollTop=0;}catch(e){overlay(false);console.error(e);showToast('打开失败：'+e.message);}}
+async function openRepository(){if(!('showDirectoryPicker' in window)){showToast('当前浏览器不支持 File System Access API，请使用 Chrome / Edge 86+');return;}let root;try{root=await window.showDirectoryPicker({mode:'read'});}catch{return;}await loadRepositoryFromDir(root,root.name);}
+let cloneTargetDir=null;
+function openCloneModal(){if(!('showDirectoryPicker' in window)){showToast('当前浏览器不支持 File System Access API，请使用 Chrome / Edge 86+');return;}$('#cloneModal').classList.add('show');setTimeout(()=>$('#cloneUrl').focus(),30);}
+function closeCloneModal(){$('#cloneModal').classList.remove('show');}
+$('#pickDirBtn').addEventListener('click',async()=>{try{const dir=await window.showDirectoryPicker({mode:'readwrite'});cloneTargetDir=dir;const el=$('#pickedDir');el.textContent=dir.name+'/.git';el.classList.remove('none');$('#cloneStart').disabled=false;}catch{}});
+async function doClone(){const url=$('#cloneUrl').value.trim();const proxy=$('#cloneProxy').value.trim();if(!url){showToast('请输入仓库 URL');return;}if(!/^https?:\/\//.test(url)){showToast('URL 必须以 http:// 或 https:// 开头');return;}if(!cloneTargetDir){showToast('请先选择目标目录');return;}closeCloneModal();overlay(true,'连接远程仓库…');try{const result=await cloneToDisk(url,proxy,cloneTargetDir,(msg)=>overlay(true,msg));const {branchName,fileCount}=result;overlay(false);showToast(`克隆完成：分支 ${branchName}，检出 ${fileCount} 个文件`);await loadRepositoryFromDir(cloneTargetDir,cloneTargetDir.name);}catch(e){overlay(false);console.error(e);showToast('克隆失败：'+e.message);render();}}
+$('#cloneStart').addEventListener('click',doClone);
+$('#cloneCancel').addEventListener('click',closeCloneModal);
+$('#cloneModal').addEventListener('click',(e)=>{if(e.target===$('#cloneModal'))closeCloneModal();});
+$('#cloneUrl').addEventListener('keydown',(e)=>{if(e.key==='Enter')doClone();});
+$('#cloneProxy').addEventListener('keydown',(e)=>{if(e.key==='Enter')doClone();});
+document.querySelectorAll('.modal-examples button').forEach((b)=>{b.addEventListener('click',()=>{$('#cloneUrl').value=b.dataset.fill;});});
+async function reload(){if(!state.repo)return;const repo=state.repo;state.diffCache.clear();repo.objCache.clear();repo.treeCache.clear();repo.commitCache.clear();repo.packs=[];overlay(true,'重新读取 packfile…');try{await repo.loadPacks();const tips=new Set();if(repo.headSha)tips.add(repo.headSha);for(const s of Object.values(repo.refs.branch))tips.add(s);for(const s of Object.values(repo.refs.tag))tips.add(s);for(const s of Object.values(repo.refs.remote))tips.add(s);overlay(true,'遍历提交历史…');const commits=await repo.walkCommits([...tips],2000,(n)=>overlay(true,`遍历提交历史… ${n} 条`));state.commits=commits;if(!commits.some((c)=>c.sha===state.selected))state.selected=commits[0]?.sha||null;overlay(false);showToast('已重新加载');render();}catch(e){overlay(false);showToast('重新加载失败：'+e.message);}}
+$('#openBtn').addEventListener('click',openRepository);
+$('#cloneBtn').addEventListener('click',openCloneModal);
+$('#refreshBtn').addEventListener('click',reload);
+$('#rows').addEventListener('click',(e)=>{const row=e.target.closest('.row');if(!row)return;state.selected=row.dataset.sha;renderRows(state.filtered);renderDetail();});
+$('#sidebar').addEventListener('click',(e)=>{const el=e.target.closest('.side-item[data-branch]');if(!el)return;const val=el.dataset.branch;state.branch=val?val:null;render();});
+let searchTimer=null;
+$('#search').addEventListener('input',(e)=>{clearTimeout(searchTimer);const v=e.target.value.trim();searchTimer=setTimeout(()=>{state.query=v;render();},120);});
+document.addEventListener('keydown',(e)=>{if(e.target.tagName==='INPUT'){if(e.key==='Escape'){if($('#cloneModal').classList.contains('show')){closeCloneModal();return;}e.target.value='';state.query='';e.target.blur();render();}return;}if($('#cloneModal').classList.contains('show'))return;if(['ArrowDown','ArrowUp','j','k'].includes(e.key)){const list=state.filtered;if(!list.length)return;e.preventDefault();const dir=(e.key==='ArrowDown'||e.key==='j')?1:-1;let idx=list.findIndex((c)=>c.sha===state.selected);if(idx===-1)idx=0;const next=Math.min(Math.max(idx+dir,0),list.length-1);if(list[next]){state.selected=list[next].sha;renderRows(list);renderDetail();const el=document.querySelector('.row.selected');if(el)el.scrollIntoView({block:'nearest'});}}if(e.key==='/'){e.preventDefault();$('#search').focus();}if((e.ctrlKey||e.metaKey)&&e.key==='o'){e.preventDefault();openRepository();}});
+renderSidebar();
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "gitdeck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitDeck — 网页版 Git 控制台，在浏览器中打开 / 克隆 / 浏览 Git 仓库",
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes serve . -l 5173",
+    "preview": "npx --yes serve . -l 5173",
+    "deploy:worker": "cd worker && npx wrangler deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
